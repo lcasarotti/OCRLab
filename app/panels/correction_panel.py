@@ -8,6 +8,7 @@ from app.engine.chunker import TextChunker
 from app.engine.llm_engine import create_engine
 from app.formats.input_reader import read_file
 from app.formats.output_writer import write_file
+from app.speech import announce
 
 
 class CorrectionPanel(wx.Panel):
@@ -73,13 +74,8 @@ class CorrectionPanel(wx.Panel):
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
 
     def _speak(self, text: str):
-        """Annuncia testo tramite screen reader."""
-        try:
-            import accessible_output2.outputs.auto as ao
-            output = ao.Auto()
-            output.speak(text)
-        except Exception:
-            pass
+        """Annuncia testo (eventi di background). Vedi app/speech.py."""
+        announce(text)
 
     def _on_open(self, _event):
         dlg = wx.FileDialog(

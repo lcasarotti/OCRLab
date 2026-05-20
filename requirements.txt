@@ -1,5 +1,5 @@
 wxPython
-accessible_output2
+accessible_output2; platform_system == "Windows"
 pytesseract
 PyMuPDF
 Pillow

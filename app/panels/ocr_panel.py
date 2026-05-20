@@ -11,6 +11,7 @@ from app.engine.windows_ocr_engine import WindowsOCREngine
 from app.engine.surya_engine import SuryaEngine
 from app.engine.chandra_engine import ChandraEngine
 from app.formats.output_writer import strip_markup, write_file
+from app.speech import announce
 
 
 def _join_hyphenated(text: str) -> str:
@@ -79,13 +80,8 @@ class OCRPanel(wx.Panel):
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
 
     def _speak(self, text: str):
-        """Annuncia testo tramite screen reader."""
-        try:
-            import accessible_output2.outputs.auto as ao
-            output = ao.Auto()
-            output.speak(text)
-        except Exception:
-            pass
+        """Annuncia testo (eventi di background). Vedi app/speech.py."""
+        announce(text)
 
     def _on_open(self, _event):
         dlg = wx.FileDialog(

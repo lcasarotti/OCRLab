@@ -1,16 +1,30 @@
 """Tab Impostazioni: configurazione OCR, LLM e chunking."""
 
 import re
+import sys
 import threading
 
 import wx
 import requests
 
 from app.config import load_config, save_config, OCR_LANGUAGES, LANG_CODE_TO_NAME, LANG_NAME_TO_CODE, ENABLE_CHANDRA
+from app.speech import announce
 
-# Motori OCR disponibili (Chandra è condizionale)
-_OCR_ENGINE_KEYS   = ["tesseract", "vlm", "windows", "surya"] + (["chandra"] if ENABLE_CHANDRA else [])
-_OCR_ENGINE_LABELS = ["Tesseract", "Ollama Vision", "Windows OCR", "Surya"] + (["Chandra"] if ENABLE_CHANDRA else [])
+# Motori OCR disponibili. Windows OCR e' solo su Windows; Chandra e' condizionale.
+_IS_WINDOWS = sys.platform == "win32"
+
+_OCR_ENGINE_KEYS = (
+    ["tesseract", "vlm"]
+    + (["windows"] if _IS_WINDOWS else [])
+    + ["surya"]
+    + (["chandra"] if ENABLE_CHANDRA else [])
+)
+_OCR_ENGINE_LABELS = (
+    ["Tesseract", "Ollama Vision"]
+    + (["Windows OCR"] if _IS_WINDOWS else [])
+    + ["Surya"]
+    + (["Chandra"] if ENABLE_CHANDRA else [])
+)
 _ENGINE_TO_IDX = {k: i for i, k in enumerate(_OCR_ENGINE_KEYS)}
 _IDX_TO_ENGINE = {i: k for i, k in enumerate(_OCR_ENGINE_KEYS)}
 
@@ -415,10 +429,10 @@ class SettingsPanel(wx.Panel):
     def _update_ocr_engine_visibility(self):
         """Aggiorna la visibilità dei controlli OCR in base al motore selezionato."""
         sel = self.rb_ocr_engine.GetSelection()
-        is_tesseract = sel == 0
-        is_vlm = sel == 1
-        is_windows = sel == 2
-        is_surya = sel == _ENGINE_TO_IDX.get("surya", 3)
+        is_tesseract = sel == _ENGINE_TO_IDX.get("tesseract", -1)
+        is_vlm = sel == _ENGINE_TO_IDX.get("vlm", -1)
+        is_windows = sel == _ENGINE_TO_IDX.get("windows", -1)
+        is_surya = sel == _ENGINE_TO_IDX.get("surya", -1)
         is_chandra = ENABLE_CHANDRA and sel == _ENGINE_TO_IDX.get("chandra", -1)
         # Controlli Tesseract
         self.lbl_tesseract_path.Show(is_tesseract)
@@ -669,13 +683,8 @@ class SettingsPanel(wx.Panel):
         return re.sub(r"\s*\(cloud\)$", "", name)
 
     def _speak(self, text: str):
-        """Annuncia testo tramite screen reader."""
-        try:
-            import accessible_output2.outputs.auto as ao
-            output = ao.Auto()
-            output.speak(text)
-        except Exception:
-            pass
+        """Annuncia testo (eventi di background). Vedi app/speech.py."""
+        announce(text)
 
     def _on_vlm_cloud_toggled(self, _event):
         """Sincronizza chk_ollama_cloud quando cambia chk_vlm_cloud."""

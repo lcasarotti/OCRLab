@@ -6,6 +6,7 @@ from app.config import load_config, save_config
 from app.panels.ocr_panel import OCRPanel
 from app.panels.correction_panel import CorrectionPanel
 from app.panels.settings_panel import SettingsPanel
+from app.speech import announce, announce_focus
 
 # ID menu operazioni
 ID_OPEN_FILE = wx.NewIdRef()
@@ -140,19 +141,14 @@ class MainFrame(wx.Frame):
             )
 
     def _speak(self, text: str):
-        """Annuncia testo tramite screen reader."""
-        try:
-            import accessible_output2.outputs.auto as ao
-            output = ao.Auto()
-            output.speak(text)
-        except Exception:
-            pass
+        """Annuncia testo (eventi di background). Vedi app/speech.py."""
+        announce(text)
 
     def _announce_tab(self, index):
-        """Annuncia il nome della tab via screen reader."""
+        """Annuncia il nome della tab. Su Mac e' un no-op: VoiceOver lo fa da se'."""
         if 0 <= index < self.notebook.GetPageCount():
             name = self.notebook.GetPageText(index)
-            self._speak(name)
+            announce_focus(name)
 
     def _on_page_changed(self, event):
         """Gestisce il cambio tab (Ctrl+Tab, click, ecc.)."""
@@ -169,14 +165,14 @@ class MainFrame(wx.Frame):
         self._config["verbose_progress"] = self.verbose_progress
         save_config(self._config)
         stato = "attivato" if self.verbose_progress else "disattivato"
-        self._speak(f"Annuncio progresso {stato}.")
+        announce_focus(f"Annuncio progresso {stato}.")
 
     def _on_toggle_streaming(self, _event):
         self.streaming_text = self.menu_streaming.IsChecked()
         self._config["streaming_text"] = self.streaming_text
         save_config(self._config)
         stato = "attivato" if self.streaming_text else "disattivato"
-        self._speak(f"Testo in tempo reale {stato}.")
+        announce_focus(f"Testo in tempo reale {stato}.")
 
     def _on_exit(self, _event):
         self.Close()
