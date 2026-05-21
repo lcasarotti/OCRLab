@@ -107,13 +107,14 @@ def _check():
 
 
 def _get_predictors() -> tuple:
-    # Forza CPU se CUDA non è disponibile (build cpu-only o torch.cuda escluso dal bundle)
+    # Sceglie il device: MPS su Apple Silicon, CUDA se disponibile, CPU altrimenti.
     try:
         import torch
-        cuda_ok = torch.cuda.is_available()
+        if torch.backends.mps.is_available():
+            os.environ.setdefault("TORCH_DEVICE", "mps")
+        elif not torch.cuda.is_available():
+            os.environ.setdefault("TORCH_DEVICE", "cpu")
     except Exception:
-        cuda_ok = False
-    if not cuda_ok:
         os.environ.setdefault("TORCH_DEVICE", "cpu")
 
     _patch_surya_transformers5()
@@ -401,6 +402,11 @@ def _ocr_page(img, det_pred, rec_pred, layout_pred,
 # Motore principale
 # ---------------------------------------------------------------------------
 
+_STANDARD_VENV_PATH = os.path.expanduser(
+    "~/Library/Application Support/OCRLab/surya-venv/bin/python"
+)
+
+
 def _worker_script_path() -> str:
     """Percorso del worker script Surya."""
     if getattr(sys, "frozen", False):
@@ -410,16 +416,29 @@ def _worker_script_path() -> str:
     return os.path.join(os.path.dirname(__file__), "surya_worker.py")
 
 
+def _resolve_python_exe(python_exe: str) -> str:
+    """Risolve il percorso Python da usare per il worker Surya.
+
+    Priorità: 1) percorso esplicito in config, 2) venv standard macOS,
+    3) stringa vuota (import diretto, solo se surya è nello stesso venv).
+    """
+    if python_exe:
+        return python_exe
+    if sys.platform == "darwin" and os.path.isfile(_STANDARD_VENV_PATH):
+        return _STANDARD_VENV_PATH
+    return ""
+
+
 class SuryaEngine:
     """Motore OCR Surya.
 
-    Se python_exe è fornito, esegue il worker Surya in un subprocess separato
-    (modalità exe: evita conflitti tra ambienti Python diversi).
-    Altrimenti, importa surya direttamente (modalità sorgente).
+    Se python_exe è fornito (o rilevato automaticamente nel percorso standard),
+    esegue il worker Surya in un subprocess separato (evita conflitti tra ambienti
+    Python diversi). Altrimenti, importa surya direttamente (modalità sorgente).
     """
 
     def __init__(self, python_exe: str = ""):
-        self._python_exe = python_exe
+        self._python_exe = _resolve_python_exe(python_exe)
 
     def process(
         self,

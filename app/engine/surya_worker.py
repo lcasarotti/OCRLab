@@ -351,13 +351,14 @@ def _ocr_page(
 # ---------------------------------------------------------------------------
 
 def main():
-    # Forza CPU se CUDA non è disponibile (build cpu-only o torch.cuda escluso dal bundle)
+    # Sceglie il device: MPS su Apple Silicon, CUDA se disponibile, CPU altrimenti.
     try:
         import torch
-        cuda_ok = torch.cuda.is_available()
+        if torch.backends.mps.is_available():
+            os.environ.setdefault("TORCH_DEVICE", "mps")
+        elif not torch.cuda.is_available():
+            os.environ.setdefault("TORCH_DEVICE", "cpu")
     except Exception:
-        cuda_ok = False
-    if not cuda_ok:
         os.environ.setdefault("TORCH_DEVICE", "cpu")
 
     _patch_surya_transformers5()
