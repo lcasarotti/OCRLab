@@ -12,6 +12,12 @@ Due funzioni con semantica diversa:
 
 Implementazione: su Mac usa il comando `say`, su Windows usa
 `accessible_output2` (NVDA / JAWS / SAPI). Su altre piattaforme: silenzio.
+
+Su Mac `announce()` puo' essere disabilitato runtime con
+`set_voice_announcements_enabled(False)`: utile quando l'app e' in primo
+piano e VoiceOver basta a coprire gli aggiornamenti di stato. Il flag non
+ha effetto su Windows, dove gli annunci passano comunque allo screen reader
+e non al sintetizzatore di sistema.
 """
 
 import subprocess
@@ -20,6 +26,15 @@ import sys
 
 _IS_MAC = sys.platform == "darwin"
 _IS_WINDOWS = sys.platform == "win32"
+
+# Flag runtime: controlla solo gli annunci con la voce di sistema su Mac.
+_voice_announcements_enabled = True
+
+
+def set_voice_announcements_enabled(enabled: bool) -> None:
+    """Abilita/disabilita gli annunci con la voce di sistema su Mac."""
+    global _voice_announcements_enabled
+    _voice_announcements_enabled = bool(enabled)
 
 
 def _speak_mac(text: str) -> None:
@@ -46,7 +61,8 @@ def announce(text: str) -> None:
     if not text:
         return
     if _IS_MAC:
-        _speak_mac(text)
+        if _voice_announcements_enabled:
+            _speak_mac(text)
     elif _IS_WINDOWS:
         _speak_windows(text)
 

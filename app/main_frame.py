@@ -1,12 +1,16 @@
 """Finestra principale con wx.Notebook a 3 tab."""
 
+import sys
+
 import wx
 
 from app.config import load_config, save_config
 from app.panels.ocr_panel import OCRPanel
 from app.panels.correction_panel import CorrectionPanel
 from app.panels.settings_panel import SettingsPanel
-from app.speech import announce, announce_focus
+from app.speech import announce, announce_focus, set_voice_announcements_enabled
+
+_IS_MAC = sys.platform == "darwin"
 
 # ID menu operazioni
 ID_OPEN_FILE = wx.NewIdRef()
@@ -15,6 +19,7 @@ ID_START = wx.NewIdRef()
 ID_STOP = wx.NewIdRef()
 ID_VERBOSE_PROGRESS = wx.NewIdRef()
 ID_STREAMING_TEXT = wx.NewIdRef()
+ID_VOICE_ANNOUNCEMENTS = wx.NewIdRef()
 
 
 class MainFrame(wx.Frame):
@@ -24,6 +29,8 @@ class MainFrame(wx.Frame):
         self._config = load_config()
         self.verbose_progress = self._config.get("verbose_progress", True)
         self.streaming_text = self._config.get("streaming_text", False)
+        self.voice_announcements = self._config.get("voice_announcements", True)
+        set_voice_announcements_enabled(self.voice_announcements)
 
         self._build_ui()
         self._build_menu()
@@ -56,6 +63,11 @@ class MainFrame(wx.Frame):
             ID_STREAMING_TEXT, "Aggiorna testo in tempo reale",
         )
         self.menu_streaming.Check(self.streaming_text)
+        if _IS_MAC:
+            self.menu_voice = ops_menu.AppendCheckItem(
+                ID_VOICE_ANNOUNCEMENTS, "Annunci con voce di sistema",
+            )
+            self.menu_voice.Check(self.voice_announcements)
         menu_bar.Append(ops_menu, "&Operazioni")
 
         help_menu = wx.Menu()
@@ -92,6 +104,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_stop, id=ID_STOP)
         self.Bind(wx.EVT_MENU, self._on_toggle_verbose, id=ID_VERBOSE_PROGRESS)
         self.Bind(wx.EVT_MENU, self._on_toggle_streaming, id=ID_STREAMING_TEXT)
+        if _IS_MAC:
+            self.Bind(wx.EVT_MENU, self._on_toggle_voice, id=ID_VOICE_ANNOUNCEMENTS)
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_page_changed)
 
         accel_entries = [
@@ -173,6 +187,18 @@ class MainFrame(wx.Frame):
         save_config(self._config)
         stato = "attivato" if self.streaming_text else "disattivato"
         announce_focus(f"Testo in tempo reale {stato}.")
+
+    def _on_toggle_voice(self, _event):
+        self.voice_announcements = self.menu_voice.IsChecked()
+        self._config["voice_announcements"] = self.voice_announcements
+        save_config(self._config)
+        set_voice_announcements_enabled(self.voice_announcements)
+        # Lo stato del check item viene letto da VoiceOver via accessibilita'
+        # Cocoa, quindi qui non serve un announce esplicito (sarebbe rumore).
+        announce_focus(
+            "Annunci con voce di sistema "
+            f"{'attivati' if self.voice_announcements else 'disattivati'}."
+        )
 
     def _on_exit(self, _event):
         self.Close()

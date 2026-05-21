@@ -182,6 +182,7 @@ DEFAULTS = {
     "join_hyphenated": False,
     "skip_tesseract_check": False,
     "streaming_text": False,
+    "voice_announcements": True,
 }
 
 
