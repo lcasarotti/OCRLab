@@ -8,6 +8,7 @@ import wx
 from app.engine.ocr_engine import OCREngine
 from app.engine.vlm_engine import VLMEngine
 from app.engine.windows_ocr_engine import WindowsOCREngine
+from app.engine.apple_vision_engine import AppleVisionEngine
 from app.engine.surya_engine import SuryaEngine
 from app.engine.chandra_engine import ChandraEngine
 from app.formats.output_writer import strip_markup, write_file
@@ -151,6 +152,18 @@ class OCRPanel(wx.Panel):
                         on_progress=on_progress,
                         cancel_event=cancel,
                         on_partial=on_partial,
+                    )
+                elif ocr_engine == "apple_vision":
+                    engine = AppleVisionEngine()
+                    result = engine.process(
+                        file_path,
+                        lang=lang,
+                        on_progress=on_progress,
+                        cancel_event=cancel,
+                        on_partial=on_partial,
+                        use_language_correction=config.get(
+                            "apple_vision_language_correction", True
+                        ),
                     )
                 elif ocr_engine == "surya":
                     engine = SuryaEngine(python_exe=config.get("surya_python", ""))

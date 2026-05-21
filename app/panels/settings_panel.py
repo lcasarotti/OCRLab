@@ -10,18 +10,22 @@ import requests
 from app.config import load_config, save_config, OCR_LANGUAGES, LANG_CODE_TO_NAME, LANG_NAME_TO_CODE, ENABLE_CHANDRA
 from app.speech import announce
 
-# Motori OCR disponibili. Windows OCR e' solo su Windows; Chandra e' condizionale.
+# Motori OCR disponibili. Windows OCR e' solo su Windows; Apple Vision solo
+# su macOS; Chandra e' condizionale.
 _IS_WINDOWS = sys.platform == "win32"
+_IS_MACOS = sys.platform == "darwin"
 
 _OCR_ENGINE_KEYS = (
     ["tesseract", "vlm"]
     + (["windows"] if _IS_WINDOWS else [])
+    + (["apple_vision"] if _IS_MACOS else [])
     + ["surya"]
     + (["chandra"] if ENABLE_CHANDRA else [])
 )
 _OCR_ENGINE_LABELS = (
     ["Tesseract", "Ollama Vision"]
     + (["Windows OCR"] if _IS_WINDOWS else [])
+    + (["Apple Vision (macOS)"] if _IS_MACOS else [])
     + ["Surya"]
     + (["Chandra"] if ENABLE_CHANDRA else [])
 )
@@ -148,6 +152,24 @@ class SettingsPanel(wx.Panel):
                   "Supporta layout multi-colonna grazie alla reading order detection.",
         )
         self._ocr_sizer.Add(self.lbl_surya_note, 0, wx.LEFT | wx.BOTTOM, 5)
+
+        # Apple Vision: nota informativa (la lingua usa la stessa combo di Tesseract).
+        self.lbl_apple_vision_note = wx.StaticText(
+            self,
+            label="Apple Vision usa il framework Vision di macOS (gratuito, locale).\n"
+                  "La lingua usa la stessa combo qui sopra.\n"
+                  "Richiede gli Xcode Command Line Tools: xcode-select --install",
+        )
+        self._ocr_sizer.Add(self.lbl_apple_vision_note, 0, wx.LEFT | wx.BOTTOM, 5)
+
+        # Apple Vision: correzione linguistica. Da disattivare se Vision
+        # tronca le ultime parole di riga su nomi propri / parole fuori dizionario.
+        self.chk_apple_vision_lang_correction = wx.CheckBox(
+            self,
+            label="Correzione linguistica Vision "
+                  "(disattiva se Vision tronca le ultime parole di riga)",
+        )
+        self._ocr_sizer.Add(self.chk_apple_vision_lang_correction, 0, wx.ALL, 5)
 
         # Chandra: percorso Python esterno + nota
         self.row_chandra_python = wx.BoxSizer(wx.HORIZONTAL)
@@ -432,15 +454,20 @@ class SettingsPanel(wx.Panel):
         is_tesseract = sel == _ENGINE_TO_IDX.get("tesseract", -1)
         is_vlm = sel == _ENGINE_TO_IDX.get("vlm", -1)
         is_windows = sel == _ENGINE_TO_IDX.get("windows", -1)
+        is_apple_vision = sel == _ENGINE_TO_IDX.get("apple_vision", -1)
         is_surya = sel == _ENGINE_TO_IDX.get("surya", -1)
         is_chandra = ENABLE_CHANDRA and sel == _ENGINE_TO_IDX.get("chandra", -1)
         # Controlli Tesseract
         self.lbl_tesseract_path.Show(is_tesseract)
         self.txt_tesseract_path.Show(is_tesseract)
         self.btn_browse_tesseract.Show(is_tesseract)
-        self.lbl_ocr_lang.Show(is_tesseract)
-        self.cmb_ocr_lang.Show(is_tesseract)
+        # Combo lingua: usata da Tesseract e Apple Vision (mappata internamente a BCP-47).
+        self.lbl_ocr_lang.Show(is_tesseract or is_apple_vision)
+        self.cmb_ocr_lang.Show(is_tesseract or is_apple_vision)
         self.btn_refresh_langs.Show(is_tesseract)
+        # Nota Apple Vision + checkbox correzione linguistica
+        self.lbl_apple_vision_note.Show(is_apple_vision)
+        self.chk_apple_vision_lang_correction.Show(is_apple_vision)
         # Controlli VLM
         self.lbl_vlm_model.Show(is_vlm)
         self.cmb_vlm_model.Show(is_vlm)
@@ -656,6 +683,9 @@ class SettingsPanel(wx.Panel):
         self.chk_vllm_eager.SetValue(self.config.get("vllm_enforce_eager", True))
         self.txt_vllm_extra.SetValue(self.config.get("vllm_extra_args", "--max-num-seqs 1"))
         self.chk_join_hyphenated.SetValue(self.config.get("join_hyphenated", False))
+        self.chk_apple_vision_lang_correction.SetValue(
+            self.config.get("apple_vision_language_correction", True)
+        )
         # Carica lingue Windows OCR in background e aggiorna la combobox
         self._winocr_lang_tags = []
         threading.Thread(target=self._load_winocr_langs_bg, daemon=True).start()
@@ -1011,6 +1041,9 @@ class SettingsPanel(wx.Panel):
         self.config["vllm_enforce_eager"] = self.chk_vllm_eager.IsChecked()
         self.config["vllm_extra_args"] = self.txt_vllm_extra.GetValue()
         self.config["join_hyphenated"] = self.chk_join_hyphenated.IsChecked()
+        self.config["apple_vision_language_correction"] = (
+            self.chk_apple_vision_lang_correction.IsChecked()
+        )
         self.config["windows_ocr_lang"] = self._get_winocr_tag()
         self.config["llm_provider"] = "ollama" if self.rb_provider.GetSelection() == 0 else "gemini"
         self.config["ollama_url"] = self.txt_ollama_url.GetValue()
@@ -1052,6 +1085,7 @@ class SettingsPanel(wx.Panel):
             "vllm_enforce_eager": self.chk_vllm_eager.IsChecked(),
             "vllm_extra_args": self.txt_vllm_extra.GetValue(),
             "join_hyphenated": self.chk_join_hyphenated.IsChecked(),
+            "apple_vision_language_correction": self.chk_apple_vision_lang_correction.IsChecked(),
             "windows_ocr_lang": self._get_winocr_tag(),
             "llm_provider": "ollama" if self.rb_provider.GetSelection() == 0 else "gemini",
             "ollama_url": self.txt_ollama_url.GetValue(),
