@@ -8,6 +8,10 @@ VENV_DIR="$APP_DIR/venv"
 SURYA_VENV="$HOME/Library/Application Support/OCRLab/surya-venv"
 SURYA_PYTHON="$SURYA_VENV/bin/python"
 
+# Funzioni pip che gestiscono correttamente i percorsi con spazi
+pip_main() { "$VENV_DIR/bin/python" -m pip "$@"; }
+pip_surya() { "$SURYA_PYTHON" -m pip "$@"; }
+
 echo "============================================================"
 echo " Installazione OCRLab"
 echo "============================================================"
@@ -35,14 +39,8 @@ else
     fi
 fi
 
-if command -v uv &>/dev/null; then
-    PIP_MAIN="uv pip install --python $VENV_DIR/bin/python"
-else
-    PIP_MAIN="$VENV_DIR/bin/pip install"
-fi
-
 echo "Installazione dipendenze principali..."
-$PIP_MAIN -r "$APP_DIR/requirements.txt" --quiet
+pip_main install -r "$APP_DIR/requirements.txt" --quiet
 echo "Dipendenze principali installate."
 echo ""
 
@@ -68,25 +66,19 @@ if [[ "${INSTALL_SURYA,,}" == "s" ]]; then
         fi
     fi
 
-    if command -v uv &>/dev/null; then
-        PIP_SURYA="uv pip install --python $SURYA_PYTHON"
-    else
-        PIP_SURYA="$SURYA_PYTHON -m pip install"
-    fi
-
     echo "Installazione PyTorch (con supporto MPS per Apple Silicon)..."
-    $PIP_SURYA torch torchvision --quiet
+    pip_surya install torch torchvision --quiet
 
     echo "Installazione Surya OCR e dipendenze..."
-    $PIP_SURYA "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests --quiet
+    pip_surya install "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests --quiet
 
     echo "Verifica installazione Surya..."
     "$SURYA_PYTHON" -c "
-import torch, surya
+import importlib.metadata, torch
 mps = torch.backends.mps.is_available()
-print(f'  torch {torch.__version__}')
-print(f'  surya {surya.__version__}')
-print(f'  MPS disponibile: {mps}')
+print('  torch:', importlib.metadata.version('torch'))
+print('  surya:', importlib.metadata.version('surya-ocr'))
+print('  MPS disponibile:', mps)
 if not mps:
     print('  ATTENZIONE: MPS non disponibile, si userà CPU.')
 "
