@@ -402,8 +402,11 @@ def _ocr_page(img, det_pred, rec_pred, layout_pred,
 # Motore principale
 # ---------------------------------------------------------------------------
 
-_STANDARD_VENV_PATH = os.path.expanduser(
+_STANDARD_VENV_PATH_MAC = os.path.expanduser(
     "~/Library/Application Support/OCRLab/surya-venv/bin/python"
+)
+_STANDARD_VENV_PATH_WIN = os.path.join(
+    os.environ.get("APPDATA", ""), "OCRLab", "surya-venv", "Scripts", "python.exe"
 )
 
 
@@ -424,8 +427,10 @@ def _resolve_python_exe(python_exe: str) -> str:
     """
     if python_exe:
         return python_exe
-    if sys.platform == "darwin" and os.path.isfile(_STANDARD_VENV_PATH):
-        return _STANDARD_VENV_PATH
+    if sys.platform == "darwin" and os.path.isfile(_STANDARD_VENV_PATH_MAC):
+        return _STANDARD_VENV_PATH_MAC
+    if sys.platform == "win32" and os.path.isfile(_STANDARD_VENV_PATH_WIN):
+        return _STANDARD_VENV_PATH_WIN
     return ""
 
 
