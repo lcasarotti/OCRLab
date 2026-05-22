@@ -95,12 +95,19 @@ echo Installazione Surya OCR e dipendenze...
 
 echo.
 echo Verifica installazione Surya...
-"%SURYA_DIR%\Scripts\python" -c "import torch, surya; print('  torch', torch.__version__); print('  surya', surya.__version__); print('  CUDA:', torch.cuda.is_available())"
+> "%TEMP%\ocrlap_check.py" (
+    echo import torch, surya
+    echo print("  torch", torch.__version__^)
+    echo print("  surya", surya.__version__^)
+    echo print("  CUDA:", torch.cuda.is_available(^)^)
+)
+"%SURYA_DIR%\Scripts\python" "%TEMP%\ocrlap_check.py"
 if errorlevel 1 (
     echo ATTENZIONE: verifica fallita. Controlla l'output sopra.
 ) else (
     echo Surya installato correttamente.
 )
+del "%TEMP%\ocrlap_check.py" 2>nul
 goto :after_surya
 
 :skip_surya
