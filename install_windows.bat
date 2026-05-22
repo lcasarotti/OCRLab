@@ -24,17 +24,14 @@ echo.
 
 REM ---- Venv principale ----
 echo Creazione venv principale...
-if exist venv\ (
-    echo Venv principale gia' esistente, salto la creazione.
-) else (
-    python -m venv venv
-    if errorlevel 1 (
-        echo ERRORE: impossibile creare il venv principale.
-        pause
-        exit /b 1
-    )
+if exist venv\ goto :venv_exists
+python -m venv venv
+if errorlevel 1 (
+    echo ERRORE: impossibile creare il venv principale.
+    pause
+    exit /b 1
 )
-
+:venv_exists
 echo Installazione dipendenze principali...
 venv\Scripts\pip install --upgrade pip --quiet
 venv\Scripts\pip install -r requirements.txt --quiet
@@ -54,53 +51,59 @@ echo Surya e' un motore OCR avanzato che richiede PyTorch (~2-5 GB).
 echo Puoi saltare questo passo e installarlo in seguito rieseguendo
 echo questo script.
 echo.
+set "INSTALL_SURYA=n"
 set /p INSTALL_SURYA="Installare Surya? [s/N]: "
-if /i "!INSTALL_SURYA!"=="s" (
-    echo.
-    echo Scegli la variante PyTorch:
-    echo   1) CUDA 12.x  ^(scheda NVIDIA, piu' veloce^)
-    echo   2) CPU only   ^(qualsiasi PC, piu' lento^)
-    echo.
-    set /p TORCH_VARIANT="Scelta [1/2]: "
-    echo.
+if /i "!INSTALL_SURYA!" NEQ "s" goto :skip_surya
 
-    set "SURYA_DIR=%APPDATA%\OCRLab\surya-venv"
+echo.
+echo Scegli la variante PyTorch:
+echo   1) CUDA 12.x  (scheda NVIDIA, piu' veloce)
+echo   2) CPU only   (qualsiasi PC, piu' lento)
+echo.
+set "TORCH_VARIANT=2"
+set /p TORCH_VARIANT="Scelta [1/2]: "
+echo.
 
-    if exist "!SURYA_DIR!\" (
-        echo Venv Surya gia' esistente, salto la creazione.
-    ) else (
-        echo Destinazione: !SURYA_DIR!
-        python -m venv "!SURYA_DIR!"
-        if errorlevel 1 (
-            echo ERRORE: impossibile creare il venv Surya.
-            pause
-            exit /b 1
-        )
-    )
+set "SURYA_DIR=%APPDATA%\OCRLab\surya-venv"
+echo Destinazione: %SURYA_DIR%
 
-    "!SURYA_DIR!\Scripts\pip" install --upgrade pip --quiet
-
-    if "!TORCH_VARIANT!"=="1" (
-        echo Installazione PyTorch con supporto CUDA 12.x...
-        "!SURYA_DIR!\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --quiet
-    ) else (
-        echo Installazione PyTorch CPU only...
-        "!SURYA_DIR!\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet
-    )
-
-    echo Installazione Surya OCR e dipendenze...
-    "!SURYA_DIR!\Scripts\pip" install "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests --quiet
-
-    echo Verifica installazione Surya...
-    "!SURYA_DIR!\Scripts\python" -c "import torch, surya; print('  torch', torch.__version__); print('  surya', surya.__version__); print('  CUDA:', torch.cuda.is_available())"
-    if errorlevel 1 (
-        echo ATTENZIONE: verifica Surya fallita. Controlla l'output sopra.
-    ) else (
-        echo Surya installato correttamente.
-    )
-) else (
-    echo Surya saltato. Riesegui questo script per installarlo in seguito.
+if exist "%SURYA_DIR%\" goto :surya_venv_exists
+python -m venv "%SURYA_DIR%"
+if errorlevel 1 (
+    echo ERRORE: impossibile creare il venv Surya.
+    pause
+    exit /b 1
 )
+:surya_venv_exists
+
+"%SURYA_DIR%\Scripts\pip" install --upgrade pip --quiet
+
+if "!TORCH_VARIANT!" NEQ "1" goto :torch_cpu
+echo Installazione PyTorch con supporto CUDA 12.x...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+goto :torch_done
+:torch_cpu
+echo Installazione PyTorch CPU only...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+:torch_done
+
+echo Installazione Surya OCR e dipendenze...
+"%SURYA_DIR%\Scripts\pip" install "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests
+
+echo.
+echo Verifica installazione Surya...
+"%SURYA_DIR%\Scripts\python" -c "import torch, surya; print('  torch', torch.__version__); print('  surya', surya.__version__); print('  CUDA:', torch.cuda.is_available())"
+if errorlevel 1 (
+    echo ATTENZIONE: verifica fallita. Controlla l'output sopra.
+) else (
+    echo Surya installato correttamente.
+)
+goto :after_surya
+
+:skip_surya
+echo Surya saltato. Riesegui questo script per installarlo in seguito.
+
+:after_surya
 echo.
 
 REM ---- Launcher ----
@@ -126,7 +129,7 @@ echo oppure scaricalo da:
 echo   https://github.com/UB-Mannheim/tesseract/wiki
 echo.
 echo Dopo l'installazione imposta il percorso in:
-echo   OCRLab -> Impostazioni -> Acquisizione -> Tesseract
+echo   OCRLab ^-^> Impostazioni ^-^> Acquisizione ^-^> Tesseract
 echo.
 
 echo ============================================================
