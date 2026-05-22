@@ -1,0 +1,9 @@
+wxPython
+accessible_output2; platform_system == "Windows"
+pytesseract
+PyMuPDF
+Pillow
+python-docx
+requests
+google-genai
+tiktoken

@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Chandra venv (separato, non includere)
+chandra/
+
+# Config locale (può contenere API key)
+config.json
+
+# File personali / test
+*.docx
+*.pdf
+*.zip
+analyze_pdf.py
+analyze_pdf2.py
+ollama.txt
+claude.txt
+chandra_huggingface.txt
+init.md
+
+# Mantieni requirements.txt
+!requirements.txt
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Claude Code internals
+.claude/
+
+# Gradio prototype (non fa parte dell'app principale)
+gradio_ocr/
+
+# Old build artifacts
+ocr-lab-cpu/
