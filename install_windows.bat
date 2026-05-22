@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 :venv_exists
 echo Installazione dipendenze principali...
-venv\Scripts\pip install --upgrade pip --quiet
+venv\Scripts\python.exe -m pip install --upgrade pip --quiet
 venv\Scripts\pip install -r requirements.txt --quiet
 if errorlevel 1 (
     echo ERRORE: installazione dipendenze fallita.
@@ -79,7 +79,7 @@ if errorlevel 1 (
 )
 :surya_venv_exists
 
-"%SURYA_DIR%\Scripts\pip" install --upgrade pip --quiet
+"%SURYA_DIR%\Scripts\python.exe" -m pip install --upgrade pip --quiet
 
 if "!TORCH_VARIANT!" NEQ "1" goto :torch_cpu
 echo Installazione PyTorch con supporto GPU (CUDA 12.6+)...
