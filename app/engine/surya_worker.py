@@ -351,12 +351,18 @@ def _ocr_page(
 # ---------------------------------------------------------------------------
 
 def main():
-    # Sceglie il device: MPS su Apple Silicon, CUDA se disponibile, CPU altrimenti.
+    # Sceglie il device: MPS su Apple Silicon, CUDA se disponibile E funzionante, CPU altrimenti.
     try:
         import torch
         if torch.backends.mps.is_available():
             os.environ.setdefault("TORCH_DEVICE", "mps")
-        elif not torch.cuda.is_available():
+        elif torch.cuda.is_available():
+            try:
+                torch.zeros(1).cuda()  # verifica che i kernel CUDA girino su questa GPU
+                os.environ.setdefault("TORCH_DEVICE", "cuda")
+            except Exception:
+                os.environ.setdefault("TORCH_DEVICE", "cpu")
+        else:
             os.environ.setdefault("TORCH_DEVICE", "cpu")
     except Exception:
         os.environ.setdefault("TORCH_DEVICE", "cpu")
