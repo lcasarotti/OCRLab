@@ -57,8 +57,11 @@ if /i "!INSTALL_SURYA!" NEQ "s" goto :skip_surya
 
 echo.
 echo Scegli la variante PyTorch:
-echo   1) CUDA 12.x  (scheda NVIDIA, piu' veloce)
-echo   2) CPU only   (qualsiasi PC, piu' lento)
+echo   1) GPU NVIDIA  (CUDA 12.6+, compatibile con CUDA 13.x)
+echo   2) CPU only    (qualsiasi PC, piu' lento)
+echo.
+echo Nota: per schede con CUDA 11.x scegli CPU e poi installa
+echo PyTorch manualmente da https://pytorch.org
 echo.
 set "TORCH_VARIANT=2"
 set /p TORCH_VARIANT="Scelta [1/2]: "
@@ -79,8 +82,8 @@ if errorlevel 1 (
 "%SURYA_DIR%\Scripts\pip" install --upgrade pip --quiet
 
 if "!TORCH_VARIANT!" NEQ "1" goto :torch_cpu
-echo Installazione PyTorch con supporto CUDA 12.x...
-"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+echo Installazione PyTorch con supporto GPU (CUDA 12.6+)...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 goto :torch_done
 :torch_cpu
 echo Installazione PyTorch CPU only...
