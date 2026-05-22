@@ -358,7 +358,8 @@ def main():
             os.environ.setdefault("TORCH_DEVICE", "mps")
         elif torch.cuda.is_available():
             try:
-                torch.zeros(1).cuda()  # verifica che i kernel CUDA girino su questa GPU
+                t = torch.ones(4, 4).cuda()
+                torch.matmul(t, t)  # esegue un kernel reale per verificare la compatibilità
                 os.environ.setdefault("TORCH_DEVICE", "cuda")
             except Exception:
                 os.environ.setdefault("TORCH_DEVICE", "cpu")

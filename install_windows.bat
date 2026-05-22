@@ -57,14 +57,15 @@ if /i "!INSTALL_SURYA!" NEQ "s" goto :skip_surya
 
 echo.
 echo Scegli la variante PyTorch:
-echo   1) GPU NVIDIA  (CUDA 12.6+, compatibile con CUDA 13.x)
-echo   2) CPU only    (qualsiasi PC, piu' lento)
+echo   1) GPU NVIDIA  CUDA 12.6  (Maxwell - Ada / Hopper, fino a sm_90)
+echo   2) GPU NVIDIA  CUDA 13.0  (Blackwell RTX 5000, sm_120+)
+echo   3) CPU only               (qualsiasi PC, piu' lento)
 echo.
-echo Nota: per schede con CUDA 11.x scegli CPU e poi installa
-echo PyTorch manualmente da https://pytorch.org
+echo Non sai quale scegliere? Apri un terminale e digita: nvidia-smi
+echo Cerca "CUDA Version" in alto a destra.
 echo.
-set "TORCH_VARIANT=2"
-set /p TORCH_VARIANT="Scelta [1/2]: "
+set "TORCH_VARIANT=3"
+set /p TORCH_VARIANT="Scelta [1/2/3]: "
 echo.
 
 set "SURYA_DIR=%APPDATA%\OCRLab\surya-venv"
@@ -81,13 +82,18 @@ if errorlevel 1 (
 
 "%SURYA_DIR%\Scripts\python.exe" -m pip install --upgrade pip --quiet
 
-if "!TORCH_VARIANT!" NEQ "1" goto :torch_cpu
-echo Installazione PyTorch con supporto GPU (CUDA 12.6+)...
-"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-goto :torch_done
-:torch_cpu
+if "!TORCH_VARIANT!"=="1" goto :torch_cu126
+if "!TORCH_VARIANT!"=="2" goto :torch_cu130
 echo Installazione PyTorch CPU only...
 "%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+goto :torch_done
+:torch_cu126
+echo Installazione PyTorch con supporto GPU CUDA 12.6...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+goto :torch_done
+:torch_cu130
+echo Installazione PyTorch con supporto GPU CUDA 13.0 (Blackwell)...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 :torch_done
 
 echo Installazione Surya OCR e dipendenze...
@@ -103,11 +109,12 @@ echo print("  surya:", importlib.metadata.version("surya-ocr")) >> "%TEMP%\ocrla
 echo cuda_ok = False >> "%TEMP%\ocrlap_check.py"
 echo if torch.cuda.is_available(): >> "%TEMP%\ocrlap_check.py"
 echo     try: >> "%TEMP%\ocrlap_check.py"
-echo         torch.zeros(1).cuda() >> "%TEMP%\ocrlap_check.py"
+echo         t = torch.ones(4, 4).cuda() >> "%TEMP%\ocrlap_check.py"
+echo         _ = torch.matmul(t, t) >> "%TEMP%\ocrlap_check.py"
 echo         cuda_ok = True >> "%TEMP%\ocrlap_check.py"
 echo     except Exception as e: >> "%TEMP%\ocrlap_check.py"
-echo         print("  ATTENZIONE: CUDA presente ma non compatibile con questa GPU:", e) >> "%TEMP%\ocrlap_check.py"
-echo         print("  Surya usera' la CPU. Reinstalla scegliendo 'CPU only' per evitare questo avviso.") >> "%TEMP%\ocrlap_check.py"
+echo         print("  ATTENZIONE: GPU presente ma non compatibile con questa build PyTorch:", e) >> "%TEMP%\ocrlap_check.py"
+echo         print("  Reinstalla Surya scegliendo la variante CUDA corretta per la tua GPU.") >> "%TEMP%\ocrlap_check.py"
 echo print("  CUDA funzionante:", cuda_ok) >> "%TEMP%\ocrlap_check.py"
 "%SURYA_DIR%\Scripts\python.exe" "%TEMP%\ocrlap_check.py"
 if errorlevel 1 (
