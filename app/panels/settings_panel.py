@@ -153,23 +153,22 @@ class SettingsPanel(wx.Panel):
         )
         self._ocr_sizer.Add(self.lbl_surya_note, 0, wx.LEFT | wx.BOTTOM, 5)
 
-        # Apple Vision: nota informativa (la lingua usa la stessa combo di Tesseract).
-        self.lbl_apple_vision_note = wx.StaticText(
-            self,
-            label="Apple Vision usa il framework Vision di macOS (gratuito, locale).\n"
-                  "La lingua usa la stessa combo qui sopra.\n"
-                  "Richiede gli Xcode Command Line Tools: xcode-select --install",
-        )
-        self._ocr_sizer.Add(self.lbl_apple_vision_note, 0, wx.LEFT | wx.BOTTOM, 5)
+        if _IS_MACOS:
+            # Apple Vision: nota informativa (la lingua usa la stessa combo di Tesseract).
+            self.lbl_apple_vision_note = wx.StaticText(
+                self,
+                label="Apple Vision usa il framework Vision di macOS (gratuito, locale).\n"
+                      "La lingua usa la stessa combo qui sopra.\n"
+                      "Richiede gli Xcode Command Line Tools: xcode-select --install",
+            )
+            self._ocr_sizer.Add(self.lbl_apple_vision_note, 0, wx.LEFT | wx.BOTTOM, 5)
 
-        # Apple Vision: correzione linguistica. Da disattivare se Vision
-        # tronca le ultime parole di riga su nomi propri / parole fuori dizionario.
-        self.chk_apple_vision_lang_correction = wx.CheckBox(
-            self,
-            label="Correzione linguistica Vision "
-                  "(disattiva se Vision tronca le ultime parole di riga)",
-        )
-        self._ocr_sizer.Add(self.chk_apple_vision_lang_correction, 0, wx.ALL, 5)
+            self.chk_apple_vision_lang_correction = wx.CheckBox(
+                self,
+                label="Correzione linguistica Vision "
+                      "(disattiva se Vision tronca le ultime parole di riga)",
+            )
+            self._ocr_sizer.Add(self.chk_apple_vision_lang_correction, 0, wx.ALL, 5)
 
         # Chandra: percorso Python esterno + nota
         self.row_chandra_python = wx.BoxSizer(wx.HORIZONTAL)
@@ -471,9 +470,9 @@ class SettingsPanel(wx.Panel):
         self.lbl_ocr_lang.Show(is_tesseract or is_apple_vision)
         self.cmb_ocr_lang.Show(is_tesseract or is_apple_vision)
         self.btn_refresh_langs.Show(is_tesseract)
-        # Nota Apple Vision + checkbox correzione linguistica
-        self.lbl_apple_vision_note.Show(is_apple_vision)
-        self.chk_apple_vision_lang_correction.Show(is_apple_vision)
+        if _IS_MACOS:
+            self.lbl_apple_vision_note.Show(is_apple_vision)
+            self.chk_apple_vision_lang_correction.Show(is_apple_vision)
         # Controlli VLM
         self.lbl_vlm_model.Show(is_vlm)
         self.cmb_vlm_model.Show(is_vlm)
@@ -689,9 +688,10 @@ class SettingsPanel(wx.Panel):
         self.chk_vllm_eager.SetValue(self.config.get("vllm_enforce_eager", True))
         self.txt_vllm_extra.SetValue(self.config.get("vllm_extra_args", "--max-num-seqs 1"))
         self.chk_join_hyphenated.SetValue(self.config.get("join_hyphenated", False))
-        self.chk_apple_vision_lang_correction.SetValue(
-            self.config.get("apple_vision_language_correction", True)
-        )
+        if _IS_MACOS:
+            self.chk_apple_vision_lang_correction.SetValue(
+                self.config.get("apple_vision_language_correction", True)
+            )
         # Carica lingue Windows OCR in background e aggiorna la combobox
         self._winocr_lang_tags = []
         threading.Thread(target=self._load_winocr_langs_bg, daemon=True).start()
@@ -1106,9 +1106,10 @@ class SettingsPanel(wx.Panel):
         self.config["vllm_enforce_eager"] = self.chk_vllm_eager.IsChecked()
         self.config["vllm_extra_args"] = self.txt_vllm_extra.GetValue()
         self.config["join_hyphenated"] = self.chk_join_hyphenated.IsChecked()
-        self.config["apple_vision_language_correction"] = (
-            self.chk_apple_vision_lang_correction.IsChecked()
-        )
+        if _IS_MACOS:
+            self.config["apple_vision_language_correction"] = (
+                self.chk_apple_vision_lang_correction.IsChecked()
+            )
         self.config["windows_ocr_lang"] = self._get_winocr_tag()
         self.config["llm_provider"] = "ollama" if self.rb_provider.GetSelection() == 0 else "gemini"
         self.config["ollama_url"] = self.txt_ollama_url.GetValue()
@@ -1145,7 +1146,9 @@ class SettingsPanel(wx.Panel):
             "vllm_enforce_eager": self.chk_vllm_eager.IsChecked(),
             "vllm_extra_args": self.txt_vllm_extra.GetValue(),
             "join_hyphenated": self.chk_join_hyphenated.IsChecked(),
-            "apple_vision_language_correction": self.chk_apple_vision_lang_correction.IsChecked(),
+            "apple_vision_language_correction": (
+                self.chk_apple_vision_lang_correction.IsChecked() if _IS_MACOS else False
+            ),
             "windows_ocr_lang": self._get_winocr_tag(),
             "llm_provider": "ollama" if self.rb_provider.GetSelection() == 0 else "gemini",
             "ollama_url": self.txt_ollama_url.GetValue(),
