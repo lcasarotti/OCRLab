@@ -364,6 +364,11 @@ class SettingsPanel(wx.Panel):
         row6.Add(self.cmb_gemini_model, 1, wx.EXPAND)
         ge_sizer.Add(row6, 0, wx.EXPAND | wx.ALL, 3)
 
+        row6b = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_refresh_gemini = wx.Button(gemini_panel, label="Modelli disponibili")
+        row6b.Add(self.btn_refresh_gemini, 0)
+        ge_sizer.Add(row6b, 0, wx.ALL, 3)
+
         gemini_panel.SetSizer(ge_sizer)
         self._llm_sizer.Add(gemini_panel, 0, wx.EXPAND | wx.LEFT, 10)
 
@@ -407,6 +412,7 @@ class SettingsPanel(wx.Panel):
         self.btn_refresh_ollama.Bind(wx.EVT_BUTTON, self._on_refresh_ollama)
         self.btn_library_ollama.Bind(wx.EVT_BUTTON, self._on_library_ollama)
         self.btn_remote_ollama.Bind(wx.EVT_BUTTON, self._on_remote_ollama)
+        self.btn_refresh_gemini.Bind(wx.EVT_BUTTON, self._on_refresh_gemini)
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
         # Sincronizzazione bidirezionale cloud/api-key tra sezione Acquisizione e Correzione
         self.chk_vlm_cloud.Bind(wx.EVT_CHECKBOX, self._on_vlm_cloud_toggled)
@@ -737,22 +743,28 @@ class SettingsPanel(wx.Panel):
             self.txt_vlm_api_key.ChangeValue(val)
 
     def _on_browse_tesseract(self, _event):
+        if _IS_WINDOWS:
+            title = "Seleziona tesseract.exe"
+            wildcard = "Eseguibili (*.exe)|*.exe"
+        else:
+            title = "Seleziona eseguibile tesseract"
+            wildcard = "Tutti i file (*)|*"
         dlg = wx.FileDialog(
-            self,
-            "Seleziona tesseract.exe",
-            wildcard="Eseguibili (*.exe)|*.exe",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            self, title, wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.txt_tesseract_path.SetValue(dlg.GetPath())
         dlg.Destroy()
 
     def _on_browse_surya_python(self, _event):
+        if _IS_WINDOWS:
+            title = "Seleziona python.exe del venv con Surya/PyTorch"
+            wildcard = "Eseguibili (*.exe)|*.exe"
+        else:
+            title = "Seleziona eseguibile Python del venv con Surya/PyTorch"
+            wildcard = "Tutti i file (*)|*"
         dlg = wx.FileDialog(
-            self,
-            "Seleziona python.exe del venv con Surya/PyTorch",
-            wildcard="Eseguibili (*.exe)|*.exe",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            self, title, wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.txt_surya_python.SetValue(dlg.GetPath())
@@ -895,11 +907,14 @@ class SettingsPanel(wx.Panel):
         self._speak("Server vLLM fermato.")
 
     def _on_browse_chandra_python(self, _event):
+        if _IS_WINDOWS:
+            title = "Seleziona python.exe del venv con Chandra installato"
+            wildcard = "Eseguibili (*.exe)|*.exe"
+        else:
+            title = "Seleziona eseguibile Python del venv con Chandra installato"
+            wildcard = "Tutti i file (*)|*"
         dlg = wx.FileDialog(
-            self,
-            "Seleziona python.exe del venv con Chandra installato",
-            wildcard="Eseguibili (*.exe)|*.exe",
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            self, title, wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.txt_chandra_python.SetValue(dlg.GetPath())
@@ -1021,6 +1036,56 @@ class SettingsPanel(wx.Panel):
 
         threading.Thread(target=_fetch, daemon=True).start()
 
+    def _on_refresh_gemini(self, _event):
+        """Interroga l'API Gemini per i modelli disponibili."""
+        api_key = self.txt_gemini_key.GetValue().strip()
+        if not api_key:
+            wx.MessageBox(
+                "Inserisci prima la API key Gemini.",
+                "Chiave mancante", wx.OK | wx.ICON_WARNING,
+            )
+            return
+        self.main_frame.set_status("Caricamento modelli Gemini...")
+        self._speak("Caricamento modelli Gemini.")
+
+        def _fetch():
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                models = [
+                    m["name"].replace("models/", "")
+                    for m in resp.json().get("models", [])
+                    if "generateContent" in m.get("supportedGenerationMethods", [])
+                ]
+                models.sort()
+                if models:
+                    wx.CallAfter(self._update_gemini_models, models)
+                else:
+                    wx.CallAfter(
+                        wx.MessageBox,
+                        "Nessun modello Gemini trovato.",
+                        "Attenzione", wx.OK | wx.ICON_WARNING,
+                    )
+                    wx.CallAfter(self.main_frame.set_status, "Nessun modello Gemini trovato.")
+            except Exception as e:
+                wx.CallAfter(
+                    wx.MessageBox,
+                    f"Errore nel recupero dei modelli Gemini:\n{e}",
+                    "Errore", wx.OK | wx.ICON_ERROR,
+                )
+                wx.CallAfter(self.main_frame.set_status, "Errore recupero modelli Gemini.")
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _update_gemini_models(self, models):
+        self.cmb_gemini_model.Set(models)
+        if models:
+            self.cmb_gemini_model.SetValue(models[0])
+        self.main_frame.set_status(f"Trovati {len(models)} modelli Gemini.")
+        self._speak(f"Trovati {len(models)} modelli Gemini.")
+        self.cmb_gemini_model.SetFocus()
+
     def _on_save(self, _event):
         """Salva le impostazioni correnti in config.json."""
         self.config["tesseract_path"] = self.txt_tesseract_path.GetValue()
@@ -1058,12 +1123,7 @@ class SettingsPanel(wx.Panel):
 
         save_config(self.config)
         self.main_frame.set_status("Impostazioni salvate.")
-        try:
-            import accessible_output2.outputs.auto as ao
-            output = ao.Auto()
-            output.speak("Impostazioni salvate.")
-        except Exception:
-            pass
+        announce("Impostazioni salvate.")
 
     def get_config(self) -> dict:
         """Restituisce la configurazione corrente (aggiornata dai controlli)."""
