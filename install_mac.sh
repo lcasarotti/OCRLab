@@ -8,9 +8,15 @@ VENV_DIR="$APP_DIR/venv"
 SURYA_VENV="$HOME/Library/Application Support/OCRLab/surya-venv"
 SURYA_PYTHON="$SURYA_VENV/bin/python"
 
-# Funzioni pip che gestiscono correttamente i percorsi con spazi
-pip_main() { "$VENV_DIR/bin/python" -m pip "$@"; }
-pip_surya() { "$SURYA_PYTHON" -m pip "$@"; }
+# Funzioni pip che gestiscono correttamente i percorsi con spazi.
+# uv pip usa il path citato dentro la funzione; senza uv usa python -m pip.
+if command -v uv &>/dev/null; then
+    pip_main()  { uv pip install --python "$VENV_DIR/bin/python" "$@"; }
+    pip_surya() { uv pip install --python "$SURYA_PYTHON" "$@"; }
+else
+    pip_main()  { "$VENV_DIR/bin/python" -m pip install "$@"; }
+    pip_surya() { "$SURYA_PYTHON" -m pip install "$@"; }
+fi
 
 echo "============================================================"
 echo " Installazione OCRLab"
@@ -40,7 +46,7 @@ else
 fi
 
 echo "Installazione dipendenze principali..."
-pip_main install -r "$APP_DIR/requirements.txt" --quiet
+pip_main -r "$APP_DIR/requirements.txt" --quiet
 echo "Dipendenze principali installate."
 echo ""
 
@@ -67,10 +73,10 @@ if [[ "${INSTALL_SURYA,,}" == "s" ]]; then
     fi
 
     echo "Installazione PyTorch (con supporto MPS per Apple Silicon)..."
-    pip_surya install torch torchvision --quiet
+    pip_surya torch torchvision --quiet
 
     echo "Installazione Surya OCR e dipendenze..."
-    pip_surya install "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests --quiet
+    pip_surya "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests --quiet
 
     echo "Verifica installazione Surya..."
     "$SURYA_PYTHON" -c "
