@@ -327,6 +327,7 @@ DEFAULTS = {
     "streaming_text": False,
     "voice_announcements": True,
     "ui_language": "auto",
+    "auto_check_updates": True,
 }
 
 

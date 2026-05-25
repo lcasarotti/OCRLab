@@ -25,6 +25,8 @@ ID_VOICE_ANNOUNCEMENTS = wx.NewIdRef()
 ID_INSTALL_SURYA = wx.NewIdRef()
 ID_UNINSTALL_SURYA = wx.NewIdRef()
 ID_TESSERACT_LANGS = wx.NewIdRef()
+ID_CHECK_UPDATES = wx.NewIdRef()
+ID_AUTO_UPDATES = wx.NewIdRef()
 
 # ID per le voci del sottomenù lingua (uno per lingua disponibile)
 _LANG_IDS: dict[str, wx.WindowIDRef] = {
@@ -49,6 +51,9 @@ class MainFrame(wx.Frame):
         self.CreateStatusBar()
         self.SetStatusText(_("Ready."))
         self.Centre()
+
+        if self._config.get("auto_check_updates", True):
+            wx.CallLater(3000, self._auto_check_updates)
 
     # ---- Menu ----
     def _build_menu(self):
@@ -99,6 +104,12 @@ class MainFrame(wx.Frame):
         menu_bar.Append(tools_menu, _("&Tools"))
 
         help_menu = wx.Menu()
+        help_menu.Append(ID_CHECK_UPDATES, _("Check for updates..."))
+        self.menu_auto_updates = help_menu.AppendCheckItem(
+            ID_AUTO_UPDATES, _("Check for updates at startup")
+        )
+        self.menu_auto_updates.Check(self._config.get("auto_check_updates", True))
+        help_menu.AppendSeparator()
         help_menu.Append(wx.ID_ABOUT, _("&About"))
         menu_bar.Append(help_menu, _("&Help"))
 
@@ -137,6 +148,8 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_install_surya, id=ID_INSTALL_SURYA)
         self.Bind(wx.EVT_MENU, self._on_uninstall_surya, id=ID_UNINSTALL_SURYA)
         self.Bind(wx.EVT_MENU, self._on_tesseract_langs, id=ID_TESSERACT_LANGS)
+        self.Bind(wx.EVT_MENU, self._on_check_updates, id=ID_CHECK_UPDATES)
+        self.Bind(wx.EVT_MENU, self._on_toggle_auto_updates, id=ID_AUTO_UPDATES)
         for lang_code, lang_id in _LANG_IDS.items():
             self.Bind(
                 wx.EVT_MENU,
@@ -298,11 +311,62 @@ class MainFrame(wx.Frame):
         self.Close()
 
     def _on_about(self, _event):
+        from app.version import __version__
         wx.MessageBox(
-            _("OCR Lab\n\nUtility for text acquisition and correction via OCR and LLM.\nFully accessible via screen reader."),
+            _("OCR Lab {version}\n\nUtility for text acquisition and correction via OCR and LLM.\nFully accessible via screen reader.").format(version=__version__),
             _("About"),
             wx.OK | wx.ICON_INFORMATION,
         )
+
+    def _on_toggle_auto_updates(self, _event):
+        enabled = self.menu_auto_updates.IsChecked()
+        self._config["auto_check_updates"] = enabled
+        save_config(self._config)
+
+    def _on_check_updates(self, _event):
+        from app.updater import check_for_updates_async
+        from app.version import __version__
+        self.set_status(_("Checking for updates..."))
+
+        def on_found(info):
+            self.set_status(_("Ready."))
+            self._show_update_dialog(info)
+
+        def on_none():
+            self.set_status(_("Ready."))
+            wx.MessageBox(
+                _("OCR Lab is up to date."),
+                _("No updates"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+
+        def on_error():
+            self.set_status(_("Ready."))
+            wx.MessageBox(
+                _("Could not check for updates.\nVerify your internet connection."),
+                _("Connection error"),
+                wx.OK | wx.ICON_WARNING,
+            )
+
+        check_for_updates_async(__version__, on_found, on_none, on_error)
+
+    def _auto_check_updates(self):
+        from app.updater import check_for_updates_async
+        from app.version import __version__
+        check_for_updates_async(__version__, self._show_update_dialog)
+
+    def _show_update_dialog(self, info):
+        import webbrowser
+        notes = info.body.strip()
+        msg = _("Version {version} available.\n\n{notes}\n\nOpen the download page?").format(
+            version=info.tag, notes=notes if notes else _("(no release notes)")
+        )
+        with wx.MessageDialog(
+            self, msg, _("Update available"), wx.YES_NO | wx.YES_DEFAULT | wx.ICON_INFORMATION
+        ) as dlg:
+            dlg.SetYesNoLabels(_("Open"), _("Later"))
+            if dlg.ShowModal() == wx.ID_YES:
+                webbrowser.open(info.url)
 
     def set_status(self, text: str):
         wx.CallAfter(self.SetStatusText, text)
