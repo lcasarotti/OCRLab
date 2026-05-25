@@ -1,10 +1,12 @@
 """Finestra principale con wx.Notebook a 3 tab."""
 
+import os
 import sys
 
 import wx
 
 from app.config import load_config, save_config
+from app.i18n import _, get_language, AVAILABLE_LANGUAGES
 from app.panels.ocr_panel import OCRPanel
 from app.panels.correction_panel import CorrectionPanel
 from app.panels.settings_panel import SettingsPanel
@@ -20,6 +22,14 @@ ID_STOP = wx.NewIdRef()
 ID_VERBOSE_PROGRESS = wx.NewIdRef()
 ID_STREAMING_TEXT = wx.NewIdRef()
 ID_VOICE_ANNOUNCEMENTS = wx.NewIdRef()
+ID_INSTALL_SURYA = wx.NewIdRef()
+ID_UNINSTALL_SURYA = wx.NewIdRef()
+ID_TESSERACT_LANGS = wx.NewIdRef()
+
+# ID per le voci del sottomenù lingua (uno per lingua disponibile)
+_LANG_IDS: dict[str, wx.WindowIDRef] = {
+    lang: wx.NewIdRef() for lang in AVAILABLE_LANGUAGES
+}
 
 
 class MainFrame(wx.Frame):
@@ -37,7 +47,7 @@ class MainFrame(wx.Frame):
         self._bind_events()
 
         self.CreateStatusBar()
-        self.SetStatusText("Pronto.")
+        self.SetStatusText(_("Ready."))
         self.Centre()
 
     # ---- Menu ----
@@ -45,34 +55,52 @@ class MainFrame(wx.Frame):
         menu_bar = wx.MenuBar()
 
         file_menu = wx.Menu()
-        file_menu.Append(ID_OPEN_FILE, "Apri file\tCtrl+O")
-        file_menu.Append(ID_SAVE, "Salva risultato\tCtrl+S")
+        file_menu.Append(ID_OPEN_FILE, _("Open file") + "\tCtrl+O")
+        file_menu.Append(ID_SAVE, _("Save result") + "\tCtrl+S")
         file_menu.AppendSeparator()
-        file_menu.Append(wx.ID_EXIT, "Esci\tAlt+F4")
-        menu_bar.Append(file_menu, "&File")
+        file_menu.Append(wx.ID_EXIT, _("Exit") + "\tAlt+F4")
+        menu_bar.Append(file_menu, _("&File"))
 
         ops_menu = wx.Menu()
-        ops_menu.Append(ID_START, "Avvia\tF5")
-        ops_menu.Append(ID_STOP, "Interrompi\tEsc")
+        ops_menu.Append(ID_START, _("Start") + "\tF5")
+        ops_menu.Append(ID_STOP, _("Stop") + "\tEsc")
         ops_menu.AppendSeparator()
         self.menu_verbose = ops_menu.AppendCheckItem(
-            ID_VERBOSE_PROGRESS, "Annuncia progresso",
+            ID_VERBOSE_PROGRESS, _("Announce progress"),
         )
         self.menu_verbose.Check(self.verbose_progress)
         self.menu_streaming = ops_menu.AppendCheckItem(
-            ID_STREAMING_TEXT, "Aggiorna testo in tempo reale",
+            ID_STREAMING_TEXT, _("Update text in real-time"),
         )
         self.menu_streaming.Check(self.streaming_text)
         if _IS_MAC:
             self.menu_voice = ops_menu.AppendCheckItem(
-                ID_VOICE_ANNOUNCEMENTS, "Annunci con voce di sistema",
+                ID_VOICE_ANNOUNCEMENTS, _("System voice announcements"),
             )
             self.menu_voice.Check(self.voice_announcements)
-        menu_bar.Append(ops_menu, "&Operazioni")
+        menu_bar.Append(ops_menu, _("&Operations"))
+
+        tools_menu = wx.Menu()
+        tools_menu.Append(ID_INSTALL_SURYA, _("Install Surya OCR..."))
+        tools_menu.Append(ID_UNINSTALL_SURYA, _("Uninstall Surya OCR..."))
+        tools_menu.AppendSeparator()
+        tools_menu.Append(ID_TESSERACT_LANGS, _("Tesseract OCR languages..."))
+        tools_menu.AppendSeparator()
+
+        # Sottomenù lingua interfaccia
+        lang_menu = wx.Menu()
+        current_lang = get_language()
+        for lang_code, lang_label in AVAILABLE_LANGUAGES.items():
+            item = lang_menu.AppendRadioItem(_LANG_IDS[lang_code], lang_label)
+            if lang_code == current_lang:
+                item.Check(True)
+        tools_menu.AppendSubMenu(lang_menu, _("Interface language"))
+
+        menu_bar.Append(tools_menu, _("&Tools"))
 
         help_menu = wx.Menu()
-        help_menu.Append(wx.ID_ABOUT, "&Info")
-        menu_bar.Append(help_menu, "&?")
+        help_menu.Append(wx.ID_ABOUT, _("&About"))
+        menu_bar.Append(help_menu, _("&Help"))
 
         self.SetMenuBar(menu_bar)
 
@@ -87,9 +115,9 @@ class MainFrame(wx.Frame):
         self.correction_panel = CorrectionPanel(self.notebook, self)
         self.settings_panel = SettingsPanel(self.notebook, self)
 
-        self.notebook.AddPage(self.ocr_panel, "Acquisizione")
-        self.notebook.AddPage(self.correction_panel, "Correzione")
-        self.notebook.AddPage(self.settings_panel, "Impostazioni")
+        self.notebook.AddPage(self.ocr_panel, _("Acquisition"))
+        self.notebook.AddPage(self.correction_panel, _("Correction"))
+        self.notebook.AddPage(self.settings_panel, _("Settings"))
 
         sizer.Add(self.notebook, 1, wx.EXPAND)
         panel.SetSizer(sizer)
@@ -106,6 +134,15 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_toggle_streaming, id=ID_STREAMING_TEXT)
         if _IS_MAC:
             self.Bind(wx.EVT_MENU, self._on_toggle_voice, id=ID_VOICE_ANNOUNCEMENTS)
+        self.Bind(wx.EVT_MENU, self._on_install_surya, id=ID_INSTALL_SURYA)
+        self.Bind(wx.EVT_MENU, self._on_uninstall_surya, id=ID_UNINSTALL_SURYA)
+        self.Bind(wx.EVT_MENU, self._on_tesseract_langs, id=ID_TESSERACT_LANGS)
+        for lang_code, lang_id in _LANG_IDS.items():
+            self.Bind(
+                wx.EVT_MENU,
+                lambda evt, lc=lang_code: self._on_set_language(lc),
+                id=lang_id,
+            )
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_page_changed)
 
         accel_entries = [
@@ -118,7 +155,6 @@ class MainFrame(wx.Frame):
         self.SetAcceleratorTable(wx.AcceleratorTable(accel_entries))
 
     def _get_active_panel(self):
-        """Restituisce il pannello attivo (OCR o Correzione), o None se è Impostazioni."""
         page = self.notebook.GetSelection()
         if page == 0:
             return self.ocr_panel
@@ -155,17 +191,14 @@ class MainFrame(wx.Frame):
             )
 
     def _speak(self, text: str):
-        """Annuncia testo (eventi di background). Vedi app/speech.py."""
         announce(text)
 
     def _announce_tab(self, index):
-        """Annuncia il nome della tab. Su Mac e' un no-op: VoiceOver lo fa da se'."""
         if 0 <= index < self.notebook.GetPageCount():
             name = self.notebook.GetPageText(index)
             announce_focus(name)
 
     def _on_page_changed(self, event):
-        """Gestisce il cambio tab (Ctrl+Tab, click, ecc.)."""
         self._announce_tab(event.GetSelection())
         event.Skip()
 
@@ -178,15 +211,15 @@ class MainFrame(wx.Frame):
         self.verbose_progress = self.menu_verbose.IsChecked()
         self._config["verbose_progress"] = self.verbose_progress
         save_config(self._config)
-        stato = "attivato" if self.verbose_progress else "disattivato"
-        announce_focus(f"Annuncio progresso {stato}.")
+        state = _("enabled") if self.verbose_progress else _("disabled")
+        announce_focus(_("Progress announced {state}.").format(state=state))
 
     def _on_toggle_streaming(self, _event):
         self.streaming_text = self.menu_streaming.IsChecked()
         self._config["streaming_text"] = self.streaming_text
         save_config(self._config)
-        stato = "attivato" if self.streaming_text else "disattivato"
-        announce_focus(f"Testo in tempo reale {stato}.")
+        state = _("enabled") if self.streaming_text else _("disabled")
+        announce_focus(_("Real-time text {state}.").format(state=state))
 
     def _on_toggle_voice(self, _event):
         self.voice_announcements = self.menu_voice.IsChecked()
@@ -195,23 +228,81 @@ class MainFrame(wx.Frame):
         set_voice_announcements_enabled(self.voice_announcements)
         # Lo stato del check item viene letto da VoiceOver via accessibilita'
         # Cocoa, quindi qui non serve un announce esplicito (sarebbe rumore).
-        announce_focus(
-            "Annunci con voce di sistema "
-            f"{'attivati' if self.voice_announcements else 'disattivati'}."
+        state = _("enabled (f)") if self.voice_announcements else _("disabled (f)")
+        announce_focus(_("System voice announcements {state}.").format(state=state))
+
+    def _on_set_language(self, lang_code: str):
+        if lang_code == get_language():
+            return
+        self._config["ui_language"] = lang_code
+        save_config(self._config)
+        wx.MessageBox(
+            _("Language will be applied after restarting the application."),
+            _("Restart required"),
+            wx.OK | wx.ICON_INFORMATION,
         )
+
+    def _on_install_surya(self, _event):
+        from app.engine.surya_installer import is_surya_installed, SuryaInstallDialog
+        if is_surya_installed():
+            venv_path = os.path.expanduser("~/Library/Application Support/OCRLab/surya-venv")
+            wx.MessageBox(
+                _("Surya OCR is already installed.\n\nVenv: {path}").format(path=venv_path),
+                _("Surya OCR"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        dlg = SuryaInstallDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_tesseract_langs(self, _event):
+        from app.engine.tesseract_lang_installer import TesseractLangDialog
+        dlg = TesseractLangDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_uninstall_surya(self, _event):
+        from app.engine.surya_installer import is_surya_installed, uninstall_surya
+        if not is_surya_installed():
+            wx.MessageBox(
+                _("Surya OCR is not installed."),
+                _("Uninstall Surya OCR"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        with wx.MessageDialog(
+            self,
+            _("The Surya OCR venv directory will be deleted.\nContinue?"),
+            _("Uninstall Surya OCR"),
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        ) as dlg:
+            dlg.SetYesNoLabels(_("Yes"), _("No"))
+            if dlg.ShowModal() != wx.ID_YES:
+                return
+        ok, msg = uninstall_surya()
+        if ok:
+            wx.MessageBox(
+                _("Surya OCR uninstalled successfully."),
+                _("Uninstall complete"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+        else:
+            wx.MessageBox(
+                _("Error during uninstallation:\n{msg}").format(msg=msg),
+                _("Error"),
+                wx.OK | wx.ICON_ERROR,
+            )
 
     def _on_exit(self, _event):
         self.Close()
 
     def _on_about(self, _event):
         wx.MessageBox(
-            "OCR Lab\n\n"
-            "Utility per acquisizione e correzione testi tramite OCR e LLM.\n"
-            "Completamente accessibile via screen reader.",
-            "Info",
+            _("OCR Lab\n\nUtility for text acquisition and correction via OCR and LLM.\nFully accessible via screen reader."),
+            _("About"),
             wx.OK | wx.ICON_INFORMATION,
         )
 
     def set_status(self, text: str):
-        """Aggiorna la status bar (thread-safe via CallAfter)."""
         wx.CallAfter(self.SetStatusText, text)

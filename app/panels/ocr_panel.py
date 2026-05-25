@@ -1,4 +1,4 @@
-"""Tab Acquisizione: OCR su immagini e PDF."""
+"""Tab Acquisition: OCR on images and PDFs."""
 
 import re
 import threading
@@ -12,14 +12,15 @@ from app.engine.apple_vision_engine import AppleVisionEngine
 from app.engine.surya_engine import SuryaEngine
 from app.engine.chandra_engine import ChandraEngine
 from app.formats.output_writer import strip_markup, write_file
+from app.i18n import _
 from app.speech import announce
 
 
 def _join_hyphenated(text: str) -> str:
-    """Unisce le parole spezzate da un trattino a fine riga.
+    """Join words broken by a hyphen at line end.
 
-    Es.: 'pa-\nrola' → 'parola', 'pa-<br>\nrola' → 'parola'
-    Salta i tag inline (es. <br>, </b>) che Surya inserisce vicino al trattino.
+    E.g.: 'pa-\nrola' → 'parola', 'pa-<br>\nrola' → 'parola'
+    Skips inline tags (e.g. <br>, </b>) that Surya inserts near the hyphen.
     """
     return re.sub(r'(\w)-(?:<[^>]+>)*\n(?:<[^>]+>)*(\w)', r'\1\2', text)
 
@@ -39,70 +40,63 @@ class OCRPanel(wx.Panel):
     def _build_ui(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # ---- Selezione file ----
         row_file = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_open = wx.Button(self, label="Apri file")
+        self.btn_open = wx.Button(self, label=_("Open file"))
         row_file.Add(self.btn_open, 0, wx.RIGHT, 5)
         self.txt_path = wx.TextCtrl(self, style=wx.TE_READONLY, size=(500, -1))
         row_file.Add(self.txt_path, 1, wx.EXPAND)
         sizer.Add(row_file, 0, wx.EXPAND | wx.ALL, 5)
 
-        # ---- Pulsanti Avvia / Interrompi ----
         row_btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_start = wx.Button(self, label="Avvia OCR")
+        self.btn_start = wx.Button(self, label=_("Start OCR"))
         row_btns.Add(self.btn_start, 0, wx.RIGHT, 5)
-        self.btn_stop = wx.Button(self, label="Interrompi")
+        self.btn_stop = wx.Button(self, label=_("Stop"))
         self.btn_stop.Enable(False)
         row_btns.Add(self.btn_stop, 0)
         sizer.Add(row_btns, 0, wx.ALL, 5)
 
-        # ---- Progress bar ----
         self.progress = wx.Gauge(self, range=100)
         self.lbl_progress = wx.StaticText(self, label="")
         sizer.Add(self.progress, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
         sizer.Add(self.lbl_progress, 0, wx.LEFT | wx.BOTTOM, 5)
 
-        # ---- Anteprima risultato ----
-        sizer.Add(wx.StaticText(self, label="Risultato OCR:"), 0, wx.LEFT | wx.TOP, 5)
+        sizer.Add(wx.StaticText(self, label=_("OCR Result:")), 0, wx.LEFT | wx.TOP, 5)
         self.txt_result = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 250))
         sizer.Add(self.txt_result, 1, wx.EXPAND | wx.ALL, 5)
 
-        # ---- Salva ----
-        self.btn_save = wx.Button(self, label="Salva risultato")
+        self.btn_save = wx.Button(self, label=_("Save result"))
         self.btn_save.Enable(False)
         sizer.Add(self.btn_save, 0, wx.ALL, 5)
 
         self.SetSizer(sizer)
 
-        # ---- Bind ----
         self.btn_open.Bind(wx.EVT_BUTTON, self._on_open)
         self.btn_start.Bind(wx.EVT_BUTTON, self._on_start_ocr)
         self.btn_stop.Bind(wx.EVT_BUTTON, self._on_stop)
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
 
     def _speak(self, text: str):
-        """Annuncia testo (eventi di background). Vedi app/speech.py."""
         announce(text)
 
     def _on_open(self, _event):
         dlg = wx.FileDialog(
             self,
-            "Seleziona file per OCR",
-            wildcard="Immagini e PDF (*.jpg;*.jpeg;*.png;*.pdf)|*.jpg;*.jpeg;*.png;*.pdf",
+            _("Open file for OCR"),
+            wildcard=_("Images and PDF (*.jpg;*.jpeg;*.png;*.pdf)|*.jpg;*.jpeg;*.png;*.pdf"),
             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.file_path = dlg.GetPath()
             self.txt_path.SetValue(self.file_path)
-            self._speak(f"File selezionato: {self.file_path}")
-            self.main_frame.set_status(f"File selezionato: {self.file_path}")
+            self._speak(_("File selected: {path}").format(path=self.file_path))
+            self.main_frame.set_status(_("File selected: {path}").format(path=self.file_path))
         dlg.Destroy()
 
     def _on_start_ocr(self, _event):
         if self._busy:
             return
         if not self.file_path:
-            wx.MessageBox("Seleziona prima un file.", "Attenzione", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox(_("Please select a file first."), _("Warning"), wx.OK | wx.ICON_WARNING)
             return
 
         self._busy = True
@@ -113,9 +107,9 @@ class OCRPanel(wx.Panel):
         self.txt_result.SetValue("")
         self._stream_display_len = 0
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel("Avvio OCR...")
-        self._speak("Avvio OCR.")
-        self.main_frame.set_status("OCR in corso...")
+        self.lbl_progress.SetLabel(_("Starting OCR..."))
+        self._speak(_("Starting OCR."))
+        self.main_frame.set_status(_("OCR in progress..."))
 
         file_path = self.file_path
         cancel = self._cancel_event
@@ -193,7 +187,7 @@ class OCRPanel(wx.Panel):
     def _update_progress(self, current, total):
         pct = int(current * 100 / total) if total else 0
         self.progress.SetValue(pct)
-        msg = f"Pagina {current} di {total}"
+        msg = _("Page {current} of {total}").format(current=current, total=total)
         self.lbl_progress.SetLabel(msg)
         self.main_frame.set_status(msg)
         if self.main_frame.verbose_progress:
@@ -203,11 +197,10 @@ class OCRPanel(wx.Panel):
         if self._busy:
             self._cancel_event.set()
             self.btn_stop.Enable(False)
-            self.lbl_progress.SetLabel("Interruzione in corso...")
-            self._speak("Interruzione in corso.")
+            self.lbl_progress.SetLabel(_("Cancellation in progress..."))
+            self._speak(_("Cancellation in progress."))
 
     def _stream_ocr(self, accumulated: str):
-        """Aggiunge al campo di testo solo il delta nuovo (streaming senza reset cursore)."""
         self.ocr_result = accumulated
         display = strip_markup(accumulated)
         delta = display[self._stream_display_len:]
@@ -220,24 +213,24 @@ class OCRPanel(wx.Panel):
         config = self.main_frame.settings_panel.get_config()
         if config.get("join_hyphenated", False):
             result = _join_hyphenated(result)
-        self.ocr_result = result          # testo grezzo con tag (usato al salvataggio)
-        self.txt_result.SetValue(strip_markup(result))  # anteprima senza tag
+        self.ocr_result = result
+        self.txt_result.SetValue(strip_markup(result))
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
         self.btn_save.Enable(True)
         self.progress.SetValue(100)
-        self.lbl_progress.SetLabel("OCR completato.")
-        self.main_frame.set_status("OCR completato.")
-        self._speak("OCR completato.")
+        self.lbl_progress.SetLabel(_("OCR completed."))
+        self.main_frame.set_status(_("OCR completed."))
+        self._speak(_("OCR completed."))
 
     def _ocr_cancelled(self):
         self._busy = False
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel("OCR interrotto.")
-        self.main_frame.set_status("OCR interrotto dall'utente.")
-        self._speak("OCR interrotto.")
+        self.lbl_progress.SetLabel(_("OCR cancelled."))
+        self.main_frame.set_status(_("OCR cancelled by user."))
+        self._speak(_("OCR cancelled."))
         if self.ocr_result:
             self.btn_save.Enable(True)
 
@@ -246,10 +239,14 @@ class OCRPanel(wx.Panel):
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel(f"Errore: {error}")
-        self.main_frame.set_status(f"Errore OCR: {error}")
-        self._speak(f"Errore OCR: {error}")
-        wx.MessageBox(f"Errore durante l'OCR:\n{error}", "Errore", wx.OK | wx.ICON_ERROR)
+        self.lbl_progress.SetLabel(_("Error: {error}").format(error=error))
+        self.main_frame.set_status(_("OCR error: {error}").format(error=error))
+        self._speak(_("OCR error: {error}").format(error=error))
+        wx.MessageBox(
+            _("Error during OCR:\n{error}").format(error=error),
+            _("Error"),
+            wx.OK | wx.ICON_ERROR,
+        )
 
     def _on_save(self, _event):
         if not self.ocr_result:
@@ -257,21 +254,20 @@ class OCRPanel(wx.Panel):
 
         dlg = wx.FileDialog(
             self,
-            "Salva risultato OCR",
-            wildcard=(
-                "File di testo (*.txt)|*.txt"
-                "|Documento Word (*.docx)|*.docx"
-                "|PDF ricercabile (*.pdf)|*.pdf"
-            ),
+            _("Save OCR result"),
+            wildcard=_("Text file (*.txt)|*.txt|Word document (*.docx)|*.docx|Searchable PDF (*.pdf)|*.pdf"),
             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
         )
         if dlg.ShowModal() == wx.ID_OK:
             path = dlg.GetPath()
             try:
                 write_file(self.ocr_result, path, source_path=self.file_path)
-                self.main_frame.set_status(f"Salvato: {path}")
-                self._speak("File salvato.")
+                self.main_frame.set_status(_("Saved: {path}").format(path=path))
+                self._speak(_("File saved."))
             except Exception as e:
-                wx.MessageBox(f"Errore nel salvataggio: {e}", "Errore", wx.OK | wx.ICON_ERROR)
+                wx.MessageBox(
+                    _("Error saving: {e}").format(e=e),
+                    _("Error"),
+                    wx.OK | wx.ICON_ERROR,
+                )
         dlg.Destroy()
-

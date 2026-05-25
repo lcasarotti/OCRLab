@@ -6,18 +6,147 @@ import os
 CONFIG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-# Lingue predefinite mostrate nella combobox (ordine fisso)
+# Lingue predefinite mostrate nella combobox — nomi in inglese (base language).
+# La UI le traduce via _() al momento della visualizzazione.
 OCR_LANGUAGES = [
-    ("ita", "Italiano"),
-    ("eng", "Inglese"),
-    ("fra", "Francese"),
-    ("deu", "Tedesco"),
-    ("spa", "Spagnolo"),
+    ("ita", "Italian"),
+    ("eng", "English"),
+    ("fra", "French"),
+    ("deu", "German"),
+    ("spa", "Spanish"),
 ]
 
+# Mappa completa codice Tesseract → nome in inglese
+LANG_CODE_TO_NAME_EN: dict[str, str] = {
+    "afr": "Afrikaans",
+    "amh": "Amharic",
+    "ara": "Arabic",
+    "asm": "Assamese",
+    "aze": "Azerbaijani",
+    "aze_cyrl": "Azerbaijani (Cyrillic)",
+    "bel": "Belarusian",
+    "ben": "Bengali",
+    "bod": "Tibetan",
+    "bos": "Bosnian",
+    "bre": "Breton",
+    "bul": "Bulgarian",
+    "cat": "Catalan",
+    "ceb": "Cebuano",
+    "ces": "Czech",
+    "chi_sim": "Chinese (Simplified)",
+    "chi_sim_vert": "Chinese Simplified (Vertical)",
+    "chi_tra": "Chinese (Traditional)",
+    "chi_tra_vert": "Chinese Traditional (Vertical)",
+    "chr": "Cherokee",
+    "cos": "Corsican",
+    "cym": "Welsh",
+    "dan": "Danish",
+    "deu": "German",
+    "div": "Dhivehi",
+    "dzo": "Dzongkha",
+    "ell": "Greek",
+    "eng": "English",
+    "enm": "Middle English",
+    "epo": "Esperanto",
+    "equ": "Math / Equations",
+    "est": "Estonian",
+    "eus": "Basque",
+    "fao": "Faroese",
+    "fas": "Persian",
+    "fil": "Filipino",
+    "fin": "Finnish",
+    "fra": "French",
+    "frk": "Frankish",
+    "frm": "Middle French",
+    "fry": "West Frisian",
+    "gla": "Scottish Gaelic",
+    "gle": "Irish",
+    "glg": "Galician",
+    "grc": "Ancient Greek",
+    "guj": "Gujarati",
+    "hat": "Haitian Creole",
+    "heb": "Hebrew",
+    "hin": "Hindi",
+    "hrv": "Croatian",
+    "hun": "Hungarian",
+    "hye": "Armenian",
+    "iku": "Inuktitut",
+    "ind": "Indonesian",
+    "isl": "Icelandic",
+    "ita": "Italian",
+    "ita_old": "Old Italian",
+    "jav": "Javanese",
+    "jpn": "Japanese",
+    "jpn_vert": "Japanese (Vertical)",
+    "kan": "Kannada",
+    "kat": "Georgian",
+    "kat_old": "Old Georgian",
+    "kaz": "Kazakh",
+    "khm": "Khmer",
+    "kir": "Kyrgyz",
+    "kmr": "Kurdish (Kurmanji)",
+    "kor": "Korean",
+    "kor_vert": "Korean (Vertical)",
+    "lao": "Lao",
+    "lat": "Latin",
+    "lav": "Latvian",
+    "lit": "Lithuanian",
+    "ltz": "Luxembourgish",
+    "mal": "Malayalam",
+    "mar": "Marathi",
+    "mkd": "Macedonian",
+    "mlt": "Maltese",
+    "mon": "Mongolian",
+    "mri": "Maori",
+    "msa": "Malay",
+    "mya": "Burmese",
+    "nep": "Nepali",
+    "nld": "Dutch",
+    "nor": "Norwegian",
+    "oci": "Occitan",
+    "ori": "Odia",
+    "osd": "Orientation and Script Detection",
+    "pan": "Punjabi",
+    "pol": "Polish",
+    "por": "Portuguese",
+    "pus": "Pashto",
+    "que": "Quechua",
+    "ron": "Romanian",
+    "rus": "Russian",
+    "san": "Sanskrit",
+    "sin": "Sinhala",
+    "slk": "Slovak",
+    "slv": "Slovenian",
+    "snd": "Sindhi",
+    "spa": "Spanish",
+    "spa_old": "Old Spanish",
+    "sqi": "Albanian",
+    "srp": "Serbian",
+    "srp_latn": "Serbian (Latin)",
+    "sun": "Sundanese",
+    "swa": "Swahili",
+    "swe": "Swedish",
+    "syr": "Syriac",
+    "tam": "Tamil",
+    "tat": "Tatar",
+    "tel": "Telugu",
+    "tgk": "Tajik",
+    "tha": "Thai",
+    "tir": "Tigrinya",
+    "ton": "Tongan",
+    "tur": "Turkish",
+    "uig": "Uyghur",
+    "ukr": "Ukrainian",
+    "urd": "Urdu",
+    "uzb": "Uzbek",
+    "uzb_cyrl": "Uzbek (Cyrillic)",
+    "vie": "Vietnamese",
+    "yid": "Yiddish",
+    "yor": "Yoruba",
+}
+
 # Mappa completa codice Tesseract → nome in italiano
-# Usata per tradurre i codici restituiti da "tesseract --list-langs"
-LANG_CODE_TO_NAME: dict[str, str] = {
+LANG_CODE_TO_NAME_IT: dict[str, str] = {
     "afr": "Afrikaans",
     "amh": "Amarico",
     "ara": "Arabo",
@@ -145,8 +274,22 @@ LANG_CODE_TO_NAME: dict[str, str] = {
     "yor": "Yoruba",
 }
 
-# Mappa inversa nome → codice (generata automaticamente dalla mappa completa)
-LANG_NAME_TO_CODE: dict[str, str] = {name: code for code, name in LANG_CODE_TO_NAME.items()}
+# Backward-compat alias — punta alla mappa della lingua corrente dell'UI.
+# Usato dai moduli che importano questo simbolo prima che sia disponibile i18n.
+# Per uso runtime, prefer get_lang_name_map().
+LANG_CODE_TO_NAME = LANG_CODE_TO_NAME_EN
+
+# Mappa inversa nome → codice: include sia nomi italiani che inglesi.
+LANG_NAME_TO_CODE: dict[str, str] = {
+    **{name: code for code, name in LANG_CODE_TO_NAME_EN.items()},
+    **{name: code for code, name in LANG_CODE_TO_NAME_IT.items()},
+}
+
+
+def get_lang_name_map() -> dict[str, str]:
+    """Return the language name map for the current UI language."""
+    from app.i18n import get_language
+    return LANG_CODE_TO_NAME_IT if get_language() == "it" else LANG_CODE_TO_NAME_EN
 
 
 # Imposta a True per abilitare il motore Chandra nell'interfaccia
@@ -183,6 +326,7 @@ DEFAULTS = {
     "skip_tesseract_check": False,
     "streaming_text": False,
     "voice_announcements": True,
+    "ui_language": "auto",
 }
 
 

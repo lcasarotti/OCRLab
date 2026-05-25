@@ -28,9 +28,58 @@ STANDARD_PATHS_MAC = (
     "/opt/local/bin/tesseract",
 )
 
+# Directory tessdata utente: le lingue aggiuntive vengono salvate qui.
+_APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/OCRLab")
+USER_TESSDATA_DIR = os.path.join(_APP_SUPPORT_DIR, "tessdata")
+
+
+def _bundled_tesseract_path() -> str | None:
+    """Restituisce il path del Tesseract incluso nel bundle PyInstaller, se presente."""
+    if not getattr(sys, "frozen", False):
+        return None
+    candidate = os.path.join(sys._MEIPASS, "tesseract")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def get_tessdata_dir() -> str | None:
+    """Restituisce la directory tessdata da usare.
+
+    Quando l'app è bundled restituisce USER_TESSDATA_DIR (Application Support),
+    che contiene sia le lingue del bundle copiate da init_tessdata() sia quelle
+    aggiuntive scaricate dall'utente. Da sorgente restituisce None (Tesseract
+    usa il suo default).
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    return USER_TESSDATA_DIR
+
+
+def init_tessdata() -> None:
+    """Copia i traineddata bundled in Application Support se non già presenti.
+
+    Va chiamata una volta all'avvio, dopo aver stabilito il path di Tesseract.
+    Popola USER_TESSDATA_DIR con i file del bundle; i file già presenti
+    (comprese lingue extra scaricate dall'utente) vengono lasciati intatti.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    bundle_tessdata = os.path.join(sys._MEIPASS, "tessdata")
+    if not os.path.isdir(bundle_tessdata):
+        return
+    os.makedirs(USER_TESSDATA_DIR, exist_ok=True)
+    for fname in os.listdir(bundle_tessdata):
+        dest = os.path.join(USER_TESSDATA_DIR, fname)
+        if not os.path.isfile(dest):
+            shutil.copy2(os.path.join(bundle_tessdata, fname), dest)
+
 
 def get_tesseract_cmd(configured_path: str = "") -> str | None:
     """Restituisce il path dell'eseguibile Tesseract se trovato, altrimenti None."""
+    # 0. Tesseract bundled nel .app (priorità massima quando frozen)
+    bundled = _bundled_tesseract_path()
+    if bundled:
+        return bundled
+
     # 1. Path configurato
     if configured_path and os.path.isfile(configured_path):
         return configured_path
@@ -201,6 +250,12 @@ def _manual_pick_tesseract(parent: wx.Window, config: dict) -> str | None:
 
 def ensure_tesseract(parent: wx.Window) -> str | None:
     """Controlla la disponibilità di Tesseract e guida l'utente se mancante."""
+    # Inizializza tessdata in Application Support (no-op se non bundled o già fatto)
+    init_tessdata()
+    tessdata = get_tessdata_dir()
+    if tessdata:
+        os.environ["TESSDATA_PREFIX"] = tessdata
+
     config = load_config()
     cmd = get_tesseract_cmd(config.get("tesseract_path", ""))
 

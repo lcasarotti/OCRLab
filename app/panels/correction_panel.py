@@ -1,4 +1,4 @@
-"""Tab Correzione: correzione testo OCR tramite LLM."""
+"""Tab Correction: OCR text correction via LLM."""
 
 import threading
 
@@ -8,6 +8,7 @@ from app.engine.chunker import TextChunker
 from app.engine.llm_engine import create_engine
 from app.formats.input_reader import read_file
 from app.formats.output_writer import write_file
+from app.i18n import _
 from app.speech import announce
 
 
@@ -27,61 +28,53 @@ class CorrectionPanel(wx.Panel):
     def _build_ui(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # ---- Selezione file ----
         row_file = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_open = wx.Button(self, label="Apri file")
+        self.btn_open = wx.Button(self, label=_("Open file"))
         row_file.Add(self.btn_open, 0, wx.RIGHT, 5)
         self.txt_path = wx.TextCtrl(self, style=wx.TE_READONLY, size=(500, -1))
         row_file.Add(self.txt_path, 1, wx.EXPAND)
         sizer.Add(row_file, 0, wx.EXPAND | wx.ALL, 5)
 
-        # ---- Anteprima testo caricato ----
-        sizer.Add(wx.StaticText(self, label="Testo originale:"), 0, wx.LEFT | wx.TOP, 5)
+        sizer.Add(wx.StaticText(self, label=_("Original text:")), 0, wx.LEFT | wx.TOP, 5)
         self.txt_original = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150))
         sizer.Add(self.txt_original, 1, wx.EXPAND | wx.ALL, 5)
 
-        # ---- Pulsanti Avvia / Interrompi ----
         row_btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_start = wx.Button(self, label="Avvia correzione")
+        self.btn_start = wx.Button(self, label=_("Start correction"))
         row_btns.Add(self.btn_start, 0, wx.RIGHT, 5)
-        self.btn_stop = wx.Button(self, label="Interrompi")
+        self.btn_stop = wx.Button(self, label=_("Stop"))
         self.btn_stop.Enable(False)
         row_btns.Add(self.btn_stop, 0)
         sizer.Add(row_btns, 0, wx.ALL, 5)
 
-        # ---- Progress bar ----
         self.progress = wx.Gauge(self, range=100)
         self.lbl_progress = wx.StaticText(self, label="")
         sizer.Add(self.progress, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
         sizer.Add(self.lbl_progress, 0, wx.LEFT | wx.BOTTOM, 5)
 
-        # ---- Risultato corretto ----
-        sizer.Add(wx.StaticText(self, label="Testo corretto:"), 0, wx.LEFT | wx.TOP, 5)
+        sizer.Add(wx.StaticText(self, label=_("Corrected text:")), 0, wx.LEFT | wx.TOP, 5)
         self.txt_result = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 150))
         sizer.Add(self.txt_result, 1, wx.EXPAND | wx.ALL, 5)
 
-        # ---- Salva ----
-        self.btn_save = wx.Button(self, label="Salva risultato")
+        self.btn_save = wx.Button(self, label=_("Save result"))
         self.btn_save.Enable(False)
         sizer.Add(self.btn_save, 0, wx.ALL, 5)
 
         self.SetSizer(sizer)
 
-        # ---- Bind ----
         self.btn_open.Bind(wx.EVT_BUTTON, self._on_open)
         self.btn_start.Bind(wx.EVT_BUTTON, self._on_start_correction)
         self.btn_stop.Bind(wx.EVT_BUTTON, self._on_stop)
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
 
     def _speak(self, text: str):
-        """Annuncia testo (eventi di background). Vedi app/speech.py."""
         announce(text)
 
     def _on_open(self, _event):
         dlg = wx.FileDialog(
             self,
-            "Seleziona file da correggere",
-            wildcard="File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx",
+            _("Open file to correct"),
+            wildcard=_("Text file (*.txt)|*.txt|Word document (*.docx)|*.docx"),
             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
@@ -90,10 +83,14 @@ class CorrectionPanel(wx.Panel):
             try:
                 self.loaded_text = read_file(self.file_path)
                 self.txt_original.SetValue(self.loaded_text)
-                self._speak(f"File caricato: {self.file_path}")
-                self.main_frame.set_status(f"File caricato: {self.file_path}")
+                self._speak(_("File loaded: {path}").format(path=self.file_path))
+                self.main_frame.set_status(_("File loaded: {path}").format(path=self.file_path))
             except Exception as e:
-                wx.MessageBox(f"Errore nella lettura: {e}", "Errore", wx.OK | wx.ICON_ERROR)
+                wx.MessageBox(
+                    _("Error reading: {e}").format(e=e),
+                    _("Error"),
+                    wx.OK | wx.ICON_ERROR,
+                )
                 self.loaded_text = ""
                 self.txt_original.SetValue("")
         dlg.Destroy()
@@ -102,7 +99,11 @@ class CorrectionPanel(wx.Panel):
         if self._busy:
             return
         if not self.loaded_text:
-            wx.MessageBox("Carica prima un file di testo.", "Attenzione", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox(
+                _("Please load a text file first."),
+                _("Warning"),
+                wx.OK | wx.ICON_WARNING,
+            )
             return
 
         self._busy = True
@@ -113,9 +114,9 @@ class CorrectionPanel(wx.Panel):
         self.txt_result.SetValue("")
         self._stream_display_len = 0
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel("Avvio correzione...")
-        self._speak("Avvio correzione.")
-        self.main_frame.set_status("Correzione in corso...")
+        self.lbl_progress.SetLabel(_("Starting correction..."))
+        self._speak(_("Starting correction."))
+        self.main_frame.set_status(_("Correction in progress..."))
 
         config = self.main_frame.settings_panel.get_config()
         text = self.loaded_text
@@ -155,7 +156,7 @@ class CorrectionPanel(wx.Panel):
     def _update_progress(self, current, total):
         pct = int(current * 100 / total) if total else 0
         self.progress.SetValue(pct)
-        msg = f"Chunk {current} di {total}"
+        msg = _("Chunk {current} of {total}").format(current=current, total=total)
         self.lbl_progress.SetLabel(msg)
         self.main_frame.set_status(msg)
         if self.main_frame.verbose_progress:
@@ -165,11 +166,10 @@ class CorrectionPanel(wx.Panel):
         if self._busy:
             self._cancel_event.set()
             self.btn_stop.Enable(False)
-            self.lbl_progress.SetLabel("Interruzione in corso...")
-            self._speak("Interruzione in corso.")
+            self.lbl_progress.SetLabel(_("Cancellation in progress..."))
+            self._speak(_("Cancellation in progress."))
 
     def _stream_correction(self, accumulated: str):
-        """Aggiunge al campo di testo solo il delta nuovo (streaming senza reset cursore)."""
         self.corrected_text = accumulated
         delta = accumulated[self._stream_display_len:]
         if delta:
@@ -184,18 +184,18 @@ class CorrectionPanel(wx.Panel):
         self.btn_stop.Enable(False)
         self.btn_save.Enable(True)
         self.progress.SetValue(100)
-        self.lbl_progress.SetLabel("Correzione completata.")
-        self.main_frame.set_status("Correzione completata.")
-        self._speak("Correzione completata.")
+        self.lbl_progress.SetLabel(_("Correction completed."))
+        self.main_frame.set_status(_("Correction completed."))
+        self._speak(_("Correction completed."))
 
     def _correction_cancelled(self):
         self._busy = False
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel("Correzione interrotta.")
-        self.main_frame.set_status("Correzione interrotta dall'utente.")
-        self._speak("Correzione interrotta.")
+        self.lbl_progress.SetLabel(_("Correction cancelled."))
+        self.main_frame.set_status(_("Correction cancelled by user."))
+        self._speak(_("Correction cancelled."))
         if self.corrected_text:
             self.btn_save.Enable(True)
 
@@ -204,10 +204,14 @@ class CorrectionPanel(wx.Panel):
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
         self.progress.SetValue(0)
-        self.lbl_progress.SetLabel(f"Errore: {error}")
-        self.main_frame.set_status(f"Errore correzione: {error}")
-        self._speak(f"Errore correzione: {error}")
-        wx.MessageBox(f"Errore durante la correzione:\n{error}", "Errore", wx.OK | wx.ICON_ERROR)
+        self.lbl_progress.SetLabel(_("Error: {error}").format(error=error))
+        self.main_frame.set_status(_("Correction error: {error}").format(error=error))
+        self._speak(_("Correction error: {error}").format(error=error))
+        wx.MessageBox(
+            _("Error during correction:\n{error}").format(error=error),
+            _("Error"),
+            wx.OK | wx.ICON_ERROR,
+        )
 
     def _on_save(self, _event):
         if not self.corrected_text:
@@ -215,16 +219,20 @@ class CorrectionPanel(wx.Panel):
 
         dlg = wx.FileDialog(
             self,
-            "Salva testo corretto",
-            wildcard="File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx",
+            _("Save corrected text"),
+            wildcard=_("Text file (*.txt)|*.txt|Word document (*.docx)|*.docx"),
             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
         )
         if dlg.ShowModal() == wx.ID_OK:
             path = dlg.GetPath()
             try:
                 write_file(self.corrected_text, path)
-                self.main_frame.set_status(f"Salvato: {path}")
-                self._speak("File salvato.")
+                self.main_frame.set_status(_("Saved: {path}").format(path=path))
+                self._speak(_("File saved."))
             except Exception as e:
-                wx.MessageBox(f"Errore nel salvataggio: {e}", "Errore", wx.OK | wx.ICON_ERROR)
+                wx.MessageBox(
+                    _("Error saving: {e}").format(e=e),
+                    _("Error"),
+                    wx.OK | wx.ICON_ERROR,
+                )
         dlg.Destroy()
