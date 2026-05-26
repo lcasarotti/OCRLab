@@ -1,5 +1,4 @@
 wxPython
-accessible_output2; platform_system == "Windows"
 pytesseract
 PyMuPDF
 Pillow
@@ -7,3 +6,16 @@ python-docx
 requests
 google-genai
 tiktoken
+
+# ── Windows only ──────────────────────────────────────────────────────────────
+accessible_output2; platform_system == "Windows"
+
+# Windows OCR (WinRT): richiesti da app/engine/windows_ocr_engine.py
+winrt-runtime; platform_system == "Windows"
+winrt-Windows.Media.Ocr; platform_system == "Windows"
+winrt-Windows.Globalization; platform_system == "Windows"
+winrt-Windows.Graphics.Imaging; platform_system == "Windows"
+winrt-Windows.Storage.Streams; platform_system == "Windows"
+winrt-Windows.Foundation; platform_system == "Windows"
+winrt-Windows.Foundation.Collections; platform_system == "Windows"
+winrt-Windows.Storage; platform_system == "Windows"
