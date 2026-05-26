@@ -103,6 +103,27 @@ class SuryaInstallDialog(wx.Dialog):
     def _log(self, text: str):
         wx.CallAfter(self.log.AppendText, text)
 
+    @staticmethod
+    def _clean_env() -> dict:
+        """Restituisce os.environ senza le variabili iniettate da PyInstaller.
+
+        Necessario perché l'installer gira dentro l'exe frozen: senza pulizia,
+        i sottoprocessi (uv, python) erediterebbero PYTHONHOME, PYTHONPATH e
+        il PATH con sys._MEIPASS, causando conflitti di DLL (es. python314.dll
+        trovato nel bundle prima di python312.dll della venv Surya).
+        """
+        env = os.environ.copy()
+        for _var in ("PYTHONHOME", "PYTHONPATH", "_MEIPASS2"):
+            env.pop(_var, None)
+        if hasattr(_sys, "_MEIPASS"):
+            _mei = os.path.normcase(_sys._MEIPASS)
+            _parts = [
+                p for p in env.get("PATH", "").split(os.pathsep)
+                if os.path.normcase(p) != _mei
+            ]
+            env["PATH"] = os.pathsep.join(_parts)
+        return env
+
     def _run_step(self, args: list, label: str) -> bool:
         """Esegue un comando e ne invia l'output al log. Restituisce True se ok."""
         self._log(f"\n--- {label} ---\n")
@@ -112,6 +133,8 @@ class SuryaInstallDialog(wx.Dialog):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=self._clean_env(),
+                creationflags=(subprocess.CREATE_NO_WINDOW if _sys.platform == "win32" else 0),
             )
             for line in proc.stdout:
                 self._log(line)
@@ -207,6 +230,7 @@ class SuryaInstallDialog(wx.Dialog):
             result = subprocess.run(
                 [nvidia_smi],
                 capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             output = result.stdout
             # "CUDA Version: 13.x" → Blackwell → cu130
@@ -341,6 +365,8 @@ class SuryaInstallDialog(wx.Dialog):
             result = subprocess.run(
                 [_SURYA_PYTHON, "-c", verify_script],
                 capture_output=True, text=True, timeout=60,
+                env=self._clean_env(),
+                creationflags=(subprocess.CREATE_NO_WINDOW if _sys.platform == "win32" else 0),
             )
             self._log(result.stdout)
             if result.returncode != 0:

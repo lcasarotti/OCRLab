@@ -1,0 +1,11 @@
+[lint]
+# Catch real bugs; skip style rules (no formatter in use)
+select = ["E", "F", "W", "B", "UP"]
+ignore = [
+    "E501",   # line too long — not enforced in this project
+    "UP006",  # use type | None — Python 3.9 compat
+    "UP007",  # use X | Y — Python 3.9 compat
+]
+
+[lint.per-file-ignores]
+"app/engine/surya_worker.py" = ["F401"]  # imports used dynamically at runtime

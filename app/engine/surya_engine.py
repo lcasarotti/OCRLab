@@ -478,6 +478,27 @@ class SuryaEngine:
         if not os.path.isfile(worker):
             raise FileNotFoundError(f"Worker Surya non trovato: {worker}")
 
+        # Costruisce un env pulito: rimuove le variabili che PyInstaller inietta
+        # nel processo principale. Se ereditate, causano un conflitto di DLL quando
+        # il worker gira su un Python diverso (surya-venv Python 3.12 vs bundle
+        # Python 3.14): Windows trova python314.dll nel PATH del bundle prima di
+        # python312.dll della venv, oppure le DLL del bundle vengono caricate
+        # al posto di quelle della venv Surya.
+        worker_env = os.environ.copy()
+        for _var in ("PYTHONHOME", "PYTHONPATH", "_MEIPASS2"):
+            worker_env.pop(_var, None)
+        # PyInstaller prepone sys._MEIPASS al PATH di os.environ per permettere
+        # il caricamento delle DLL del bundle. Il sottoprocesso eredita questo PATH:
+        # rimuove _MEIPASS per evitare che python314.dll venga trovato via PATH
+        # invece che tramite la directory dell'interprete Python 3.12 della venv.
+        if hasattr(sys, "_MEIPASS"):
+            _mei = os.path.normcase(sys._MEIPASS)
+            _path_parts = [
+                p for p in worker_env.get("PATH", "").split(os.pathsep)
+                if os.path.normcase(p) != _mei
+            ]
+            worker_env["PATH"] = os.pathsep.join(_path_parts)
+
         proc = subprocess.Popen(
             [self._python_exe, worker],
             stdin=subprocess.PIPE,
@@ -485,6 +506,8 @@ class SuryaEngine:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            env=worker_env,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
         )
 
         # Drena stderr in background per evitare deadlock: PyTorch/tqdm/transformers
@@ -502,15 +525,25 @@ class SuryaEngine:
         threading.Thread(target=_drain_stderr, daemon=True).start()
 
         try:
-            # Attende l'inizializzazione dei modelli
-            ready_line = proc.stdout.readline()
-            if not ready_line:
-                proc.wait()
-                stderr = "".join(stderr_lines)
-                raise RuntimeError(
-                    f"Il worker Surya non ha risposto.\n{stderr[:500]}"
-                )
-            msg = json.loads(ready_line)
+            # Attende l'inizializzazione dei modelli.
+            # Salta righe vuote o non-JSON che torch/transformers/tqdm
+            # possono scrivere su stdout durante il caricamento dei modelli.
+            msg = None
+            while msg is None:
+                ready_line = proc.stdout.readline()
+                if not ready_line:
+                    proc.wait()
+                    stderr = "".join(stderr_lines)
+                    raise RuntimeError(
+                        f"Il worker Surya non ha risposto.\n{stderr[:500]}"
+                    )
+                ready_line = ready_line.strip()
+                if not ready_line:
+                    continue
+                try:
+                    msg = json.loads(ready_line)
+                except json.JSONDecodeError:
+                    continue
             if msg.get("type") == "error":
                 raise RuntimeError(msg.get("message", "Errore sconosciuto nel worker"))
             # msg.type == "ready"
@@ -543,10 +576,18 @@ class SuryaEngine:
         cmd = json.dumps({"path": img_path, "forced_angle": forced_angle})
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("Il worker Surya ha smesso di rispondere.")
-        msg = json.loads(line)
+        msg = None
+        while msg is None:
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError("Il worker Surya ha smesso di rispondere.")
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore nel worker"))
         return msg.get("text", ""), msg.get("angle")

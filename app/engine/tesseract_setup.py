@@ -29,7 +29,10 @@ STANDARD_PATHS_MAC = (
 )
 
 # Directory tessdata utente: le lingue aggiuntive vengono salvate qui.
-_APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/OCRLab")
+if _IS_WINDOWS:
+    _APP_SUPPORT_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "OCRLab")
+else:
+    _APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/OCRLab")
 USER_TESSDATA_DIR = os.path.join(_APP_SUPPORT_DIR, "tessdata")
 
 
@@ -42,24 +45,28 @@ def _bundled_tesseract_path() -> str | None:
 
 
 def get_tessdata_dir() -> str | None:
-    """Restituisce la directory tessdata da usare.
+    """Restituisce la directory tessdata da usare, o None per usare il default di Tesseract.
 
-    Quando l'app è bundled restituisce USER_TESSDATA_DIR (Application Support),
-    che contiene sia le lingue del bundle copiate da init_tessdata() sia quelle
-    aggiuntive scaricate dall'utente. Da sorgente restituisce None (Tesseract
-    usa il suo default).
+    Quando l'app è bundled e USER_TESSDATA_DIR contiene file restituisce
+    USER_TESSDATA_DIR, che contiene le lingue di base (copiate da init_tessdata
+    o da _init_tessdata_windows) più quelle aggiuntive scaricate dall'utente.
+    Restituisce None se non siamo in un bundle o se la directory è vuota (in
+    quel caso Tesseract usa il proprio tessdata di sistema).
     """
     if not getattr(sys, "frozen", False):
         return None
-    return USER_TESSDATA_DIR
+    if os.path.isdir(USER_TESSDATA_DIR) and any(
+        f.endswith(".traineddata") for f in os.listdir(USER_TESSDATA_DIR)
+    ):
+        return USER_TESSDATA_DIR
+    return None
 
 
 def init_tessdata() -> None:
     """Copia i traineddata bundled in Application Support se non già presenti.
 
-    Va chiamata una volta all'avvio, dopo aver stabilito il path di Tesseract.
-    Popola USER_TESSDATA_DIR con i file del bundle; i file già presenti
-    (comprese lingue extra scaricate dall'utente) vengono lasciati intatti.
+    Usata su macOS dove il bundle .app include una directory tessdata.
+    Su Windows la directory tessdata non è bundled; usare _init_tessdata_windows().
     """
     if not getattr(sys, "frozen", False):
         return
@@ -71,6 +78,31 @@ def init_tessdata() -> None:
         dest = os.path.join(USER_TESSDATA_DIR, fname)
         if not os.path.isfile(dest):
             shutil.copy2(os.path.join(bundle_tessdata, fname), dest)
+
+
+def _init_tessdata_windows(tesseract_cmd: str) -> None:
+    """Popola USER_TESSDATA_DIR dai traineddata dell'installazione Tesseract di sistema.
+
+    Chiamata al primo avvio su Windows (frozen) quando USER_TESSDATA_DIR è vuota.
+    Copia tutti i .traineddata dalla directory tessdata accanto all'eseguibile
+    Tesseract in USER_TESSDATA_DIR, così le lingue extra scaricate dall'utente
+    convivono con le lingue standard sotto un unico TESSDATA_PREFIX.
+    File già presenti in USER_TESSDATA_DIR vengono lasciati intatti.
+    """
+    if not _IS_WINDOWS or not getattr(sys, "frozen", False):
+        return
+    if os.path.isdir(USER_TESSDATA_DIR) and any(
+        f.endswith(".traineddata") for f in os.listdir(USER_TESSDATA_DIR)
+    ):
+        return
+    system_tessdata = os.path.join(os.path.dirname(tesseract_cmd), "tessdata")
+    if not os.path.isdir(system_tessdata):
+        return
+    os.makedirs(USER_TESSDATA_DIR, exist_ok=True)
+    for fname in os.listdir(system_tessdata):
+        dest = os.path.join(USER_TESSDATA_DIR, fname)
+        if not os.path.isfile(dest):
+            shutil.copy2(os.path.join(system_tessdata, fname), dest)
 
 
 def get_tesseract_cmd(configured_path: str = "") -> str | None:
@@ -250,14 +282,21 @@ def _manual_pick_tesseract(parent: wx.Window, config: dict) -> str | None:
 
 def ensure_tesseract(parent: wx.Window) -> str | None:
     """Controlla la disponibilità di Tesseract e guida l'utente se mancante."""
-    # Inizializza tessdata in Application Support (no-op se non bundled o già fatto)
-    init_tessdata()
+    config = load_config()
+    cmd = get_tesseract_cmd(config.get("tesseract_path", ""))
+
+    # Inizializza tessdata in Application Support.
+    # macOS: init_tessdata() copia dal bundle .app.
+    # Windows: _init_tessdata_windows() copia dall'installazione di sistema
+    #          (solo al primo avvio, quando USER_TESSDATA_DIR è vuota).
+    if _IS_WINDOWS and cmd:
+        _init_tessdata_windows(cmd)
+    else:
+        init_tessdata()
+
     tessdata = get_tessdata_dir()
     if tessdata:
         os.environ["TESSDATA_PREFIX"] = tessdata
-
-    config = load_config()
-    cmd = get_tesseract_cmd(config.get("tesseract_path", ""))
 
     if cmd and _verify_tesseract(cmd):
         # Salva il path trovato nella configurazione

@@ -51,3 +51,6 @@ gradio_ocr/
 
 # Old build artifacts
 ocr-lab-cpu/
+
+# Artefatto Windows creato da redirect 2>NUL nei hook di Claude Code
+NUL

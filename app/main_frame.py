@@ -258,7 +258,8 @@ class MainFrame(wx.Frame):
     def _on_install_surya(self, _event):
         from app.engine.surya_installer import is_surya_installed, SuryaInstallDialog
         if is_surya_installed():
-            venv_path = os.path.expanduser("~/Library/Application Support/OCRLab/surya-venv")
+            from app.engine.surya_installer import _SURYA_VENV_DIR
+            venv_path = _SURYA_VENV_DIR
             wx.MessageBox(
                 _("Surya OCR is already installed.\n\nVenv: {path}").format(path=venv_path),
                 _("Surya OCR"),
