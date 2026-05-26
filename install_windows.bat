@@ -55,17 +55,36 @@ set "INSTALL_SURYA=n"
 set /p INSTALL_SURYA="Installare Surya? [s/N]: "
 if /i "!INSTALL_SURYA!" NEQ "s" goto :skip_surya
 
-echo.
-echo Scegli la variante PyTorch:
-echo   1) GPU NVIDIA  CUDA 12.6  (Maxwell - Ada / Hopper, fino a sm_90)
-echo   2) GPU NVIDIA  CUDA 13.0  (Blackwell RTX 5000, sm_120+)
-echo   3) CPU only               (qualsiasi PC, piu' lento)
-echo.
-echo Non sai quale scegliere? Apri un terminale e digita: nvidia-smi
-echo Cerca "CUDA Version" in alto a destra.
-echo.
-set "TORCH_VARIANT=3"
-set /p TORCH_VARIANT="Scelta [1/2/3]: "
+REM ---- Rilevamento GPU NVIDIA ----
+set "TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu"
+set "TORCH_LABEL=CPU only"
+nvidia-smi >nul 2>&1
+if errorlevel 1 (
+    echo GPU NVIDIA non rilevata ^(nvidia-smi non trovato^) — uso PyTorch CPU only.
+) else (
+    echo GPU NVIDIA rilevata. Lettura versione CUDA...
+    for /f "tokens=*" %%L in ('nvidia-smi 2^>^&1') do (
+        echo %%L | findstr /i "CUDA Version" >nul 2>&1
+        if not errorlevel 1 (
+            for /f "tokens=3" %%V in ("%%L") do set "CUDA_VER=%%V"
+        )
+    )
+    if defined CUDA_VER (
+        echo Versione CUDA rilevata: !CUDA_VER!
+        for /f "tokens=1 delims=." %%M in ("!CUDA_VER!") do set "CUDA_MAJOR=%%M"
+        if !CUDA_MAJOR! GEQ 13 (
+            set "TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130"
+            set "TORCH_LABEL=CUDA 13.0 (Blackwell)"
+        ) else (
+            set "TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126"
+            set "TORCH_LABEL=CUDA 12.6"
+        )
+    ) else (
+        set "TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126"
+        set "TORCH_LABEL=CUDA 12.6 (default GPU)"
+    )
+)
+echo Backend selezionato: !TORCH_LABEL!
 echo.
 
 set "SURYA_DIR=%APPDATA%\OCRLab\surya-venv"
@@ -82,19 +101,8 @@ if errorlevel 1 (
 
 "%SURYA_DIR%\Scripts\python.exe" -m pip install --upgrade pip --quiet
 
-if "!TORCH_VARIANT!"=="1" goto :torch_cu126
-if "!TORCH_VARIANT!"=="2" goto :torch_cu130
-echo Installazione PyTorch CPU only...
-"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-goto :torch_done
-:torch_cu126
-echo Installazione PyTorch con supporto GPU CUDA 12.6...
-"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-goto :torch_done
-:torch_cu130
-echo Installazione PyTorch con supporto GPU CUDA 13.0 (Blackwell)...
-"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu130
-:torch_done
+echo Installazione PyTorch (!TORCH_LABEL!)...
+"%SURYA_DIR%\Scripts\pip" install torch torchvision --index-url !TORCH_INDEX_URL!
 
 echo Installazione Surya OCR e dipendenze...
 "%SURYA_DIR%\Scripts\pip" install "surya-ocr" "transformers>=4.40,<5" PyMuPDF Pillow requests

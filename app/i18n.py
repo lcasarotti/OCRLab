@@ -56,6 +56,21 @@ def detect_system_language() -> str:
         except Exception:
             pass
 
+    # Windows: legge LocaleName dal registro (es. "it-IT" → "it")
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Control Panel\International",
+            ) as key:
+                locale_name, _ = winreg.QueryValueEx(key, "LocaleName")
+                prefix = locale_name.split("-")[0].lower()
+                if prefix in AVAILABLE_LANGUAGES:
+                    return prefix
+        except Exception:
+            pass
+
     # Fallback: variabile LANG / locale Python
     import locale as _locale
     try:

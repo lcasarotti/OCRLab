@@ -192,6 +192,43 @@ class SuryaInstallDialog(wx.Dialog):
             return ""
 
     @staticmethod
+    def _detect_torch_index_url() -> str:
+        """Rileva il backend GPU su Windows e restituisce l'index-url corretto per PyTorch.
+
+        Ritorna "" se non siamo su Windows o se non è rilevabile una GPU NVIDIA,
+        il che significa usare PyPI standard (CPU-only o MPS su macOS).
+        """
+        if _sys.platform != "win32":
+            return ""
+        nvidia_smi = shutil.which("nvidia-smi")
+        if not nvidia_smi:
+            return ""
+        try:
+            result = subprocess.run(
+                [nvidia_smi],
+                capture_output=True, text=True, timeout=10,
+            )
+            output = result.stdout
+            # "CUDA Version: 13.x" → Blackwell → cu130
+            for line in output.splitlines():
+                if "CUDA Version:" in line:
+                    parts = line.split("CUDA Version:")
+                    if len(parts) > 1:
+                        ver_str = parts[1].strip().split()[0]  # es. "12.6" o "13.0"
+                        major = int(ver_str.split(".")[0])
+                        minor = int(ver_str.split(".")[1]) if "." in ver_str else 0
+                        if major >= 13:
+                            return "https://download.pytorch.org/whl/cu130"
+                        if major == 12 and minor >= 6:
+                            return "https://download.pytorch.org/whl/cu126"
+                        # CUDA < 12.6: cu126 è la build più vecchia ancora supportata
+                        return "https://download.pytorch.org/whl/cu126"
+        except Exception:
+            pass
+        # nvidia-smi presente ma output non parsabile: usiamo cu126 come default GPU
+        return "https://download.pytorch.org/whl/cu126"
+
+    @staticmethod
     def _find_python3() -> str:
         """Cerca Python 3.10+ nel PATH e nei percorsi comuni per piattaforma."""
         if _sys.platform == "win32":
@@ -256,10 +293,21 @@ class SuryaInstallDialog(wx.Dialog):
             wx.CallAfter(self._on_finished, False)
             return
 
-        ok = self._run_step(
-            pip_base + ["torch", "torchvision"],
-            "Installazione PyTorch (con supporto MPS)",
-        )
+        torch_index_url = self._detect_torch_index_url()
+        if torch_index_url:
+            self._log(f"GPU NVIDIA rilevata — backend: {torch_index_url.split('/')[-1]}\n")
+            torch_args = ["torch", "torchvision", "--index-url", torch_index_url]
+            step_label = f"Installazione PyTorch ({torch_index_url.split('/')[-1]})"
+        elif _sys.platform == "win32":
+            self._log("GPU NVIDIA non rilevata — installazione PyTorch CPU only.\n")
+            torch_args = ["torch", "torchvision",
+                          "--index-url", "https://download.pytorch.org/whl/cpu"]
+            step_label = "Installazione PyTorch (CPU only)"
+        else:
+            torch_args = ["torch", "torchvision"]
+            step_label = "Installazione PyTorch (con supporto MPS)"
+
+        ok = self._run_step(pip_base + torch_args, step_label)
         if not ok:
             wx.CallAfter(self._on_finished, False)
             return
@@ -273,13 +321,25 @@ class SuryaInstallDialog(wx.Dialog):
             return
 
         self._log("\n--- Verifica ---\n")
+        if _sys.platform == "win32":
+            verify_script = (
+                "import torch, importlib.metadata, surya; "
+                "cuda = torch.cuda.is_available(); "
+                "print(f'  torch {torch.__version__}'); "
+                "print(f'  surya {importlib.metadata.version(\"surya-ocr\")}'); "
+                "print(f'  CUDA disponibile: {cuda}')"
+            )
+        else:
+            verify_script = (
+                "import torch, importlib.metadata, surya; "
+                "mps = torch.backends.mps.is_available(); "
+                "print(f'  torch {torch.__version__}'); "
+                "print(f'  surya {importlib.metadata.version(\"surya-ocr\")}'); "
+                "print(f'  MPS disponibile: {mps}')"
+            )
         try:
             result = subprocess.run(
-                [_SURYA_PYTHON, "-c",
-                 "import torch, importlib.metadata, surya; mps = torch.backends.mps.is_available(); "
-                 "print(f'  torch {torch.__version__}'); "
-                 "print(f'  surya {importlib.metadata.version(\"surya-ocr\")}'); "
-                 "print(f'  MPS disponibile: {mps}')"],
+                [_SURYA_PYTHON, "-c", verify_script],
                 capture_output=True, text=True, timeout=60,
             )
             self._log(result.stdout)
