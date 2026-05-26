@@ -8,6 +8,7 @@ Apple Vision usa lo script Swift a runtime (richiede Xcode CLT installato).
 
 import os
 import sys
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
@@ -28,15 +29,18 @@ def _find_venv_site_packages(base: str) -> str | None:
 
 VENV_SP = _find_venv_site_packages(BASE) or ""
 
+# --- PyMuPDF: raccoglie DLL native, datas e hiddenimports in un colpo ---
+_pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("pymupdf")
+
 # --- Tesseract bundled ---
 _TESSERACT_BIN = "/opt/homebrew/bin/tesseract"
-binaries = [(_TESSERACT_BIN, ".")] if os.path.isfile(_TESSERACT_BIN) else []
+binaries = list(_pymupdf_binaries) + ([(_TESSERACT_BIN, ".")] if os.path.isfile(_TESSERACT_BIN) else [])
 
 _TESSDATA_SRC = "/opt/homebrew/share/tessdata"
 _BUNDLED_LANGS = ("eng", "ita")
 
 # --- Dati da includere ---
-datas = []
+datas = list(_pymupdf_datas)
 
 # tessdata: eng + ita nel bundle; l'utente può aggiungere lingue extra in
 # ~/Library/Application Support/OCRLab/tessdata/ dall'app
@@ -67,15 +71,13 @@ if VENV_SP:
         datas.append((tiktoken_ext_path, "tiktoken_ext"))
 
 # --- Hidden imports ---
-hiddenimports = [
+hiddenimports = _pymupdf_hidden + [
     "tiktoken",
     "tiktoken.core",
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
     "google.genai",
     "fitz",          # PyMuPDF compat shim
-    "pymupdf",       # PyMuPDF >= 1.23: il package reale; fitz è solo un alias
-    "pymupdf._pymupdf",
     "PIL._imagingtk",
 ]
 

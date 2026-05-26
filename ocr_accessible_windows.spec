@@ -11,6 +11,7 @@ Per la build, eseguire dal venv Windows del progetto:
 
 import os
 import sys
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
@@ -28,8 +29,11 @@ def _find_venv_site_packages(base: str) -> str | None:
 
 VENV_SP = _find_venv_site_packages(BASE) or ""
 
+# --- PyMuPDF: raccoglie DLL native, datas e hiddenimports in un colpo ---
+_pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("pymupdf")
+
 # --- Dati da includere ---
-datas = []
+datas = list(_pymupdf_datas)
 
 # locale/: file di traduzione UI (en, it, ...) — necessario per i18n nel bundle
 if os.path.isdir(os.path.join(BASE, "locale")):
@@ -58,15 +62,13 @@ if VENV_SP:
         datas.append((tiktoken_ext_path, "tiktoken_ext"))
 
 # --- Hidden imports ---
-hiddenimports = [
+hiddenimports = _pymupdf_hidden + [
     "tiktoken",
     "tiktoken.core",
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
     "google.genai",
     "fitz",          # PyMuPDF compat shim
-    "pymupdf",       # PyMuPDF >= 1.23: il package reale; fitz è solo un alias
-    "pymupdf._pymupdf",
     "PIL._imagingtk",
     # accessible_output2
     "accessible_output2",
@@ -91,7 +93,7 @@ hiddenimports = [
 a = Analysis(
     ["run.py"],
     pathex=[BASE],
-    binaries=[],
+    binaries=_pymupdf_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
