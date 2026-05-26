@@ -9,9 +9,9 @@ Per la build, eseguire dal venv Windows del progetto:
   .venv\\Scripts\\pyinstaller.exe -y ocr_accessible_windows.spec
 """
 
+import glob as _glob
 import os
 import sys
-from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
@@ -29,12 +29,20 @@ def _find_venv_site_packages(base: str) -> str | None:
 
 VENV_SP = _find_venv_site_packages(BASE) or ""
 
-# --- PyMuPDF: raccoglie DLL native, datas e hiddenimports in un colpo.
-#     Prova prima "pymupdf" (>= 1.23), poi "fitz" (< 1.23). ---
-try:
-    _pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("pymupdf")
-except Exception:
-    _pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("fitz")
+# --- PyMuPDF: copia l'intera directory del package nel bundle.
+#     collect_all non funziona affidabilmente con PyMuPDF >= 1.24. ---
+_pymupdf_datas = []
+_pymupdf_binaries = []
+if VENV_SP:
+    for _pkg_name in ("pymupdf", "fitz"):
+        _pkg_dir = os.path.join(VENV_SP, _pkg_name)
+        if os.path.isdir(_pkg_dir):
+            _pymupdf_datas.append((_pkg_dir, _pkg_name))
+            for _pyd in _glob.glob(os.path.join(_pkg_dir, "*.pyd")):
+                _pymupdf_binaries.append((_pyd, _pkg_name))
+            for _dll in _glob.glob(os.path.join(_pkg_dir, "*.dll")):
+                _pymupdf_binaries.append((_dll, _pkg_name))
+            break
 
 # --- Dati da includere ---
 datas = list(_pymupdf_datas)
@@ -66,7 +74,10 @@ if VENV_SP:
         datas.append((tiktoken_ext_path, "tiktoken_ext"))
 
 # --- Hidden imports ---
-hiddenimports = _pymupdf_hidden + [
+hiddenimports = [
+    "pymupdf",
+    "pymupdf._pymupdf",
+    "fitz",
     "tiktoken",
     "tiktoken.core",
     "tiktoken_ext",
