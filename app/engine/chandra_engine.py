@@ -27,7 +27,7 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import requests
 from PIL import Image
 

@@ -5,7 +5,7 @@ import io
 import threading
 from typing import Callable
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 from PIL import Image
 
 

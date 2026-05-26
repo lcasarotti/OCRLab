@@ -68,7 +68,6 @@ hiddenimports = _pymupdf_hidden + [
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
     "google.genai",
-    "fitz",          # PyMuPDF compat shim
     "PIL._imagingtk",
     # accessible_output2
     "accessible_output2",

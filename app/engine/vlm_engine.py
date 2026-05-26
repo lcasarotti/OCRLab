@@ -6,7 +6,7 @@ import os
 import threading
 from typing import Callable
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import requests
 from PIL import Image
 

@@ -214,7 +214,7 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None
         ocr_text:    testo OCR con pagine separate da \\f.
         out_path:    percorso del file PDF di output.
     """
-    import fitz
+    import pymupdf as fitz
 
     pages_text = [strip_markup(t).strip() for t in ocr_text.split("\f")]
 

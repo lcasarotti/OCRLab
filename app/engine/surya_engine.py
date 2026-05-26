@@ -17,7 +17,7 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
-import fitz
+import pymupdf as fitz
 from PIL import Image
 
 _predictors: dict = {}
