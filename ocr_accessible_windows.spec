@@ -31,6 +31,10 @@ VENV_SP = _find_venv_site_packages(BASE) or ""
 # --- Dati da includere ---
 datas = []
 
+# locale/: file di traduzione UI (en, it, ...) — necessario per i18n nel bundle
+if os.path.isdir(os.path.join(BASE, "locale")):
+    datas.append(("locale", "locale"))
+
 # surya_worker.py: eseguito dal Python del surya-venv esterno
 datas.append(("app/engine/surya_worker.py", "."))
 
@@ -61,6 +65,7 @@ hiddenimports = [
     "tiktoken_ext.openai_public",
     "google.genai",
     "fitz",       # PyMuPDF
+    "PIL._imagingtk",
     # accessible_output2
     "accessible_output2",
     "accessible_output2.outputs",
