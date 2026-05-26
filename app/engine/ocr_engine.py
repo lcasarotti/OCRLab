@@ -4,7 +4,10 @@ import os
 import threading
 from typing import Callable
 
-import pymupdf as fitz  # PyMuPDF
+try:
+    import pymupdf as fitz  # PyMuPDF >= 1.23
+except ImportError:
+    import fitz  # PyMuPDF < 1.23
 import pytesseract
 from PIL import Image
 

@@ -29,8 +29,12 @@ def _find_venv_site_packages(base: str) -> str | None:
 
 VENV_SP = _find_venv_site_packages(BASE) or ""
 
-# --- PyMuPDF: raccoglie DLL native, datas e hiddenimports in un colpo ---
-_pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("pymupdf")
+# --- PyMuPDF: raccoglie DLL native, datas e hiddenimports in un colpo.
+#     Prova prima "pymupdf" (>= 1.23), poi "fitz" (< 1.23). ---
+try:
+    _pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("pymupdf")
+except Exception:
+    _pymupdf_datas, _pymupdf_binaries, _pymupdf_hidden = collect_all("fitz")
 
 # --- Dati da includere ---
 datas = list(_pymupdf_datas)

@@ -17,7 +17,10 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
-import pymupdf as fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 from PIL import Image
 
 _predictors: dict = {}

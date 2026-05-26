@@ -15,7 +15,10 @@ import tempfile
 import threading
 from typing import Callable, Optional
 
-import pymupdf as fitz  # PyMuPDF
+try:
+    import pymupdf as fitz  # PyMuPDF >= 1.23
+except ImportError:
+    import fitz  # PyMuPDF < 1.23
 
 # Mappa codici Tesseract -> codici BCP-47 supportati da Vision.
 # Tutto il resto viene passato così com'è (l'utente può inserire un BCP-47 a mano).
