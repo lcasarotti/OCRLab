@@ -73,7 +73,9 @@ hiddenimports = [
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
     "google.genai",
-    "fitz",       # PyMuPDF
+    "fitz",          # PyMuPDF compat shim
+    "pymupdf",       # PyMuPDF >= 1.23: il package reale; fitz è solo un alias
+    "pymupdf._pymupdf",
     "PIL._imagingtk",
 ]
 
