@@ -15,12 +15,17 @@ def main():
 
     from app.main_frame import MainFrame
     from app.engine.tesseract_setup import ensure_tesseract
+    from app.engine.surya_installer import ensure_surya
 
     app = wx.App()
     frame = MainFrame()
     frame.Show()
 
-    wx.CallAfter(ensure_tesseract, frame)
+    def _startup_checks():
+        ensure_tesseract(frame)
+        ensure_surya(frame)
+
+    wx.CallAfter(_startup_checks)
 
     app.MainLoop()
 

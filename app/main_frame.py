@@ -24,6 +24,7 @@ ID_STREAMING_TEXT = wx.NewIdRef()
 ID_VOICE_ANNOUNCEMENTS = wx.NewIdRef()
 ID_INSTALL_SURYA = wx.NewIdRef()
 ID_UNINSTALL_SURYA = wx.NewIdRef()
+ID_INSTALL_TESSERACT = wx.NewIdRef()
 ID_TESSERACT_LANGS = wx.NewIdRef()
 ID_CHECK_UPDATES = wx.NewIdRef()
 ID_AUTO_UPDATES = wx.NewIdRef()
@@ -89,6 +90,8 @@ class MainFrame(wx.Frame):
         tools_menu.Append(ID_INSTALL_SURYA, _("Install Surya OCR..."))
         tools_menu.Append(ID_UNINSTALL_SURYA, _("Uninstall Surya OCR..."))
         tools_menu.AppendSeparator()
+        if not _IS_MAC:
+            tools_menu.Append(ID_INSTALL_TESSERACT, _("Install Tesseract OCR..."))
         tools_menu.Append(ID_TESSERACT_LANGS, _("Tesseract OCR languages..."))
         tools_menu.AppendSeparator()
 
@@ -147,6 +150,8 @@ class MainFrame(wx.Frame):
             self.Bind(wx.EVT_MENU, self._on_toggle_voice, id=ID_VOICE_ANNOUNCEMENTS)
         self.Bind(wx.EVT_MENU, self._on_install_surya, id=ID_INSTALL_SURYA)
         self.Bind(wx.EVT_MENU, self._on_uninstall_surya, id=ID_UNINSTALL_SURYA)
+        if not _IS_MAC:
+            self.Bind(wx.EVT_MENU, self._on_install_tesseract, id=ID_INSTALL_TESSERACT)
         self.Bind(wx.EVT_MENU, self._on_tesseract_langs, id=ID_TESSERACT_LANGS)
         self.Bind(wx.EVT_MENU, self._on_check_updates, id=ID_CHECK_UPDATES)
         self.Bind(wx.EVT_MENU, self._on_toggle_auto_updates, id=ID_AUTO_UPDATES)
@@ -270,6 +275,10 @@ class MainFrame(wx.Frame):
         dlg.ShowModal()
         dlg.Destroy()
 
+    def _on_install_tesseract(self, _event):
+        from app.engine.tesseract_setup import install_tesseract_interactive
+        install_tesseract_interactive(self)
+
     def _on_tesseract_langs(self, _event):
         from app.engine.tesseract_lang_installer import TesseractLangDialog
         dlg = TesseractLangDialog(self)
@@ -277,8 +286,8 @@ class MainFrame(wx.Frame):
         dlg.Destroy()
 
     def _on_uninstall_surya(self, _event):
-        from app.engine.surya_installer import is_surya_installed, uninstall_surya
-        if not is_surya_installed():
+        from app.engine.surya_installer import uninstall_surya, _SURYA_VENV_DIR
+        if not os.path.isdir(_SURYA_VENV_DIR):
             wx.MessageBox(
                 _("Surya OCR is not installed."),
                 _("Uninstall Surya OCR"),

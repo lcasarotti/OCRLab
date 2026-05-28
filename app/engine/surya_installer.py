@@ -41,6 +41,79 @@ def is_surya_installed() -> bool:
         return False
 
 
+class _SuryaNotFoundDlg(wx.Dialog):
+    """Dialogo 'Surya non trovato' con checkbox 'non mostrare più'."""
+
+    def __init__(self, parent):
+        super().__init__(parent, title=_("Surya OCR not found"),
+                         style=wx.DEFAULT_DIALOG_STYLE)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        label = _(
+            "Surya OCR is not installed.\n\n"
+            "Do you want to install it now?\n"
+            "Installation requires an internet connection and may take several minutes."
+        )
+        msg = wx.StaticText(self, label=label)
+        sizer.Add(msg, 0, wx.ALL, 12)
+
+        self.chk_skip = wx.CheckBox(self, label=_("Do not show this message again"))
+        sizer.Add(self.chk_skip, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        btn_yes = wx.Button(self, wx.ID_YES, _("Yes"))
+        btn_no = wx.Button(self, wx.ID_NO, _("No"))
+        btn_sizer.Add(btn_yes, 0, wx.RIGHT, 8)
+        btn_sizer.Add(btn_no, 0)
+        sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.BOTTOM, 12)
+
+        self.SetSizer(sizer)
+        self.Fit()
+
+        btn_yes.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_YES))
+        btn_no.Bind(wx.EVT_BUTTON, lambda _: self.EndModal(wx.ID_NO))
+
+    @property
+    def skip(self) -> bool:
+        return self.chk_skip.IsChecked()
+
+
+def _show_surya_prompt(parent: wx.Window) -> None:
+    from app.config import load_config, save_config
+    config = load_config()
+    if config.get("skip_surya_check", False):
+        return
+
+    dlg = _SuryaNotFoundDlg(parent)
+    choice = dlg.ShowModal()
+    skip = dlg.skip
+    dlg.Destroy()
+
+    if skip:
+        config["skip_surya_check"] = True
+        save_config(config)
+
+    if choice == wx.ID_YES:
+        install_dlg = SuryaInstallDialog(parent)
+        install_dlg.ShowModal()
+        install_dlg.Destroy()
+
+
+def ensure_surya(parent: wx.Window) -> None:
+    """Controlla la disponibilità di Surya in background e offre all'utente di installarlo."""
+    import threading
+    from app.config import load_config
+    config = load_config()
+    if config.get("skip_surya_check", False):
+        return
+
+    def _check():
+        if not is_surya_installed():
+            wx.CallAfter(_show_surya_prompt, parent)
+
+    threading.Thread(target=_check, daemon=True).start()
+
+
 def uninstall_surya() -> tuple[bool, str]:
     """Rimuove il venv Surya. Restituisce (ok, messaggio_errore)."""
     try:
@@ -89,7 +162,6 @@ class SuryaInstallDialog(wx.Dialog):
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_install = wx.Button(self, label=_("Install"))
         self.btn_close = wx.Button(self, wx.ID_CLOSE, _("Close"))
-        self.btn_close.Disable()
         btn_sizer.Add(self.btn_install, 0, wx.RIGHT, 8)
         btn_sizer.Add(self.btn_close, 0)
         sizer.Add(btn_sizer, 0, wx.ALIGN_CENTER | wx.BOTTOM, 12)
@@ -226,6 +298,22 @@ class SuryaInstallDialog(wx.Dialog):
         nvidia_smi = shutil.which("nvidia-smi")
         if not nvidia_smi:
             return ""
+        # Compute capability: SM >= 10 copre Blackwell data center (B100=SM10)
+        # e Blackwell consumer (RTX 5000=SM12) → entrambi richiedono cu130.
+        try:
+            cc_result = subprocess.run(
+                [nvidia_smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if cc_result.returncode == 0:
+                cc_str = cc_result.stdout.strip().splitlines()[0].strip()
+                cc_major = int(float(cc_str))
+                if cc_major >= 10:
+                    return "https://download.pytorch.org/whl/cu130"
+        except Exception:
+            pass
+        # Fallback: versione CUDA riportata dal driver
         try:
             result = subprocess.run(
                 [nvidia_smi],
@@ -233,7 +321,6 @@ class SuryaInstallDialog(wx.Dialog):
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             output = result.stdout
-            # "CUDA Version: 13.x" → Blackwell → cu130
             for line in output.splitlines():
                 if "CUDA Version:" in line:
                     parts = line.split("CUDA Version:")
@@ -245,7 +332,6 @@ class SuryaInstallDialog(wx.Dialog):
                             return "https://download.pytorch.org/whl/cu130"
                         if major == 12 and minor >= 6:
                             return "https://download.pytorch.org/whl/cu126"
-                        # CUDA < 12.6: cu126 è la build più vecchia ancora supportata
                         return "https://download.pytorch.org/whl/cu126"
         except Exception:
             pass
@@ -283,6 +369,11 @@ class SuryaInstallDialog(wx.Dialog):
 
     def _install_thread(self):
         os.makedirs(os.path.dirname(_SURYA_VENV_DIR), exist_ok=True)
+
+        # Venv esistente ma Surya non funzionante → rimozione per ripartire puliti
+        if os.path.isdir(_SURYA_VENV_DIR) and not is_surya_installed():
+            self._log("Venv parziale trovato — rimozione in corso...\n")
+            shutil.rmtree(_SURYA_VENV_DIR, ignore_errors=True)
 
         uv = self._find_uv()
         if not uv:
@@ -337,7 +428,7 @@ class SuryaInstallDialog(wx.Dialog):
             return
 
         ok = self._run_step(
-            pip_base + ["surya-ocr", "transformers>=4.40,<5", "PyMuPDF", "Pillow", "requests"],
+            pip_base + ["surya-ocr>=0.17,<0.18", "transformers>=4.40,<5", "PyMuPDF", "Pillow", "requests"],
             "Installazione Surya OCR e dipendenze",
         )
         if not ok:
@@ -402,6 +493,7 @@ class SuryaInstallDialog(wx.Dialog):
 
     def _on_install(self, _event):
         self.btn_install.Disable()
+        self.btn_close.Disable()
         threading.Thread(target=self._install_thread, daemon=True).start()
 
     def _on_close(self, event):

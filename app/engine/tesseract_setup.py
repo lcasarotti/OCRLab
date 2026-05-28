@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 import wx
 import requests
@@ -144,49 +145,61 @@ def _verify_tesseract(cmd: str) -> bool:
         return False
 
 
-def _download_and_install(parent: wx.Window) -> str | None:
-    """Scarica e avvia l'installer di Tesseract. Restituisce il path se installato."""
-    dlg = wx.ProgressDialog(
-        "Download Tesseract",
-        "Download in corso...",
-        maximum=100,
-        parent=parent,
-        style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE,
-    )
-    try:
-        resp = requests.get(TESSERACT_INSTALLER_URL, stream=True, timeout=60)
-        resp.raise_for_status()
+def _download_and_install(parent: wx.Window) -> None:
+    """Scarica l'installer Tesseract in background e lo avvia con privilegi elevati."""
+    # Dialogo modale con gauge — il download gira in un thread separato
+    dlg = wx.Dialog(parent, title="Download Tesseract",
+                    style=wx.DEFAULT_DIALOG_STYLE & ~wx.CLOSE_BOX)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    label = wx.StaticText(dlg, label="Download in corso...")
+    gauge = wx.Gauge(dlg, range=100, style=wx.GA_HORIZONTAL | wx.GA_SMOOTH, size=(350, -1))
+    sizer.Add(label, 0, wx.ALL, 12)
+    sizer.Add(gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+    dlg.SetSizer(sizer)
+    dlg.Fit()
 
-        total = int(resp.headers.get("content-length", 0))
-        tmp_path = os.path.join(tempfile.gettempdir(), "tesseract_installer.exe")
+    result: list = [None]
 
-        downloaded = 0
-        with open(tmp_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1024 * 256):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = min(int(downloaded * 100 / total), 100)
-                    dlg.Update(pct, f"Download: {downloaded // 1024} / {total // 1024} KB")
+    def _do_download():
+        try:
+            resp = requests.get(TESSERACT_INSTALLER_URL, stream=True, timeout=60)
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            tmp_path = os.path.join(tempfile.gettempdir(), "tesseract_installer.exe")
+            downloaded = 0
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 256):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        pct = min(int(downloaded * 100 / total), 100)
+                        wx.CallAfter(label.SetLabel,
+                                     f"Download: {downloaded // 1024} / {total // 1024} KB")
+                        wx.CallAfter(gauge.SetValue, pct)
+            result[0] = tmp_path
+        except Exception as e:
+            result[0] = e
+        wx.CallAfter(dlg.EndModal, wx.ID_OK)
 
-        dlg.Update(100, "Download completato. Avvio installer...")
-        dlg.Destroy()
+    threading.Thread(target=_do_download, daemon=True).start()
+    dlg.ShowModal()
+    dlg.Destroy()
 
-        # Avvia l'installer con privilegi elevati (richiede UAC)
+    if isinstance(result[0], Exception):
         wx.MessageBox(
-            "L'installer di Tesseract verrà avviato con privilegi di amministratore.\n"
-            "Completa l'installazione e poi premi OK.",
-            "Installazione Tesseract",
-            wx.OK | wx.ICON_INFORMATION,
+            f"Errore durante il download: {result[0]}", "Errore", wx.OK | wx.ICON_ERROR, parent
         )
-        import ctypes
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", tmp_path, None, None, 1)
-        return None  # L'utente deve completare l'installazione manualmente
+        return
 
-    except Exception as e:
-        dlg.Destroy()
-        wx.MessageBox(f"Errore durante il download: {e}", "Errore", wx.OK | wx.ICON_ERROR)
-        return None
+    tmp_path = result[0]
+    wx.MessageBox(
+        "Premi OK per avviare l'installer di Tesseract con privilegi di amministratore.",
+        "Installazione Tesseract",
+        wx.OK | wx.ICON_INFORMATION,
+        parent,
+    )
+    import ctypes
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", tmp_path, None, None, 1)
 
 
 class _TesseractNotFoundDlg(wx.Dialog):
@@ -280,6 +293,21 @@ def _manual_pick_tesseract(parent: wx.Window, config: dict) -> str | None:
     return result
 
 
+def install_tesseract_interactive(parent: wx.Window) -> None:
+    """Avvia il download/installazione di Tesseract su richiesta esplicita dal menu."""
+    config = load_config()
+    cmd = get_tesseract_cmd(config.get("tesseract_path", ""))
+    if cmd and _verify_tesseract(cmd):
+        wx.MessageBox(
+            "Tesseract OCR è già installato.",
+            "Tesseract OCR",
+            wx.OK | wx.ICON_INFORMATION,
+            parent,
+        )
+        return
+    _download_and_install(parent)
+
+
 def ensure_tesseract(parent: wx.Window) -> str | None:
     """Controlla la disponibilità di Tesseract e guida l'utente se mancante."""
     config = load_config()
@@ -335,10 +363,6 @@ def ensure_tesseract(parent: wx.Window) -> str | None:
             return cmd
     elif choice == wx.ID_YES:
         # Mac / Linux: selezione manuale.
-        return _manual_pick_tesseract(parent, config)
-    elif choice == wx.ID_NO and _IS_WINDOWS:
-        # Su Windows ricalca il comportamento storico: il "No" apre comunque
-        # il selettore manuale.
         return _manual_pick_tesseract(parent, config)
 
     return None
