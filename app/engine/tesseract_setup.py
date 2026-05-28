@@ -92,10 +92,6 @@ def _init_tessdata_windows(tesseract_cmd: str) -> None:
     """
     if not _IS_WINDOWS or not getattr(sys, "frozen", False):
         return
-    if os.path.isdir(USER_TESSDATA_DIR) and any(
-        f.endswith(".traineddata") for f in os.listdir(USER_TESSDATA_DIR)
-    ):
-        return
     system_tessdata = os.path.join(os.path.dirname(tesseract_cmd), "tessdata")
     if not os.path.isdir(system_tessdata):
         return
