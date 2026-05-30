@@ -405,35 +405,24 @@ def _ocr_page(img, det_pred, rec_pred, layout_pred,
 # Motore principale
 # ---------------------------------------------------------------------------
 
-_STANDARD_VENV_PATH_MAC = os.path.expanduser(
-    "~/Library/Application Support/OCRLab/surya-venv/bin/python"
-)
-_STANDARD_VENV_PATH_WIN = os.path.join(
-    os.environ.get("APPDATA", ""), "OCRLab", "surya-venv", "Scripts", "python.exe"
-)
-
-
-def _worker_script_path() -> str:
-    """Percorso del worker script Surya."""
-    if getattr(sys, "frozen", False):
-        # Eseguibile PyInstaller: il worker è bundled in _MEIPASS
-        return os.path.join(sys._MEIPASS, "surya_worker.py")
-    # Modalità sorgente: stesso package
-    return os.path.join(os.path.dirname(__file__), "surya_worker.py")
-
-
-def _resolve_python_exe(python_exe: str) -> str:
+def _resolve_python_exe(python_exe: str, venv_name: str = "surya-venv") -> str:
     """Risolve il percorso Python da usare per il worker Surya.
 
-    Priorità: 1) percorso esplicito in config, 2) venv standard macOS,
+    Priorità: 1) percorso esplicito in config, 2) venv standard per piattaforma,
     3) stringa vuota (import diretto, solo se surya è nello stesso venv).
     """
     if python_exe:
         return python_exe
-    if sys.platform == "darwin" and os.path.isfile(_STANDARD_VENV_PATH_MAC):
-        return _STANDARD_VENV_PATH_MAC
-    if sys.platform == "win32" and os.path.isfile(_STANDARD_VENV_PATH_WIN):
-        return _STANDARD_VENV_PATH_WIN
+    mac_path = os.path.expanduser(
+        f"~/Library/Application Support/OCRLab/{venv_name}/bin/python"
+    )
+    win_path = os.path.join(
+        os.environ.get("APPDATA", ""), "OCRLab", venv_name, "Scripts", "python.exe"
+    )
+    if sys.platform == "darwin" and os.path.isfile(mac_path):
+        return mac_path
+    if sys.platform == "win32" and os.path.isfile(win_path):
+        return win_path
     return ""
 
 
@@ -443,10 +432,124 @@ class SuryaEngine:
     Se python_exe è fornito (o rilevato automaticamente nel percorso standard),
     esegue il worker Surya in un subprocess separato (evita conflitti tra ambienti
     Python diversi). Altrimenti, importa surya direttamente (modalità sorgente).
+
+    Le sottoclassi possono sovrascrivere _VENV_NAME e _WORKER_NAME per puntare a
+    venv e worker diversi (es. Surya 0.20).
     """
 
+    _VENV_NAME = "surya-venv"
+    _WORKER_NAME = "surya_worker.py"
+    _PDF_DPI = 150
+
     def __init__(self, python_exe: str = ""):
-        self._python_exe = _resolve_python_exe(python_exe)
+        self._python_exe = _resolve_python_exe(python_exe, self._VENV_NAME)
+        self._proc = None
+        self._stderr_lines: list[str] = []
+        self._last_html: str = ""
+        self._last_blocks: list = []
+
+    def _get_worker_path(self) -> str:
+        """Percorso del worker script per questo engine."""
+        if getattr(sys, "frozen", False):
+            return os.path.join(sys._MEIPASS, self._WORKER_NAME)
+        return os.path.join(os.path.dirname(__file__), self._WORKER_NAME)
+
+    def _build_worker_env(self) -> dict:
+        worker_env = os.environ.copy()
+        for _var in ("PYTHONHOME", "PYTHONPATH", "_MEIPASS2"):
+            worker_env.pop(_var, None)
+        if hasattr(sys, "_MEIPASS"):
+            _mei = os.path.normcase(sys._MEIPASS)
+            _path_parts = [
+                p for p in worker_env.get("PATH", "").split(os.pathsep)
+                if os.path.normcase(p) != _mei
+            ]
+            worker_env["PATH"] = os.pathsep.join(_path_parts)
+        return worker_env
+
+    def start(self) -> None:
+        """Avvia il subprocess worker e attende "ready". Idempotente se già in esecuzione."""
+        if self.is_running():
+            return
+        worker = self._get_worker_path()
+        if not os.path.isfile(worker):
+            raise FileNotFoundError(f"Worker Surya non trovato: {worker}")
+
+        self._stderr_lines = []
+        proc = subprocess.Popen(
+            [self._python_exe, worker],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            env=self._build_worker_env(),
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+        )
+
+        stderr_lines = self._stderr_lines
+
+        def _drain():
+            try:
+                for line in proc.stderr:
+                    stderr_lines.append(line)
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain, daemon=True).start()
+
+        msg = None
+        while msg is None:
+            ready_line = proc.stdout.readline()
+            if not ready_line:
+                proc.wait()
+                stderr = "".join(self._stderr_lines)
+                raise RuntimeError(f"Il worker Surya non ha risposto.\n{stderr[:500]}")
+            ready_line = ready_line.strip()
+            if not ready_line:
+                continue
+            try:
+                msg = json.loads(ready_line)
+            except json.JSONDecodeError:
+                continue
+        if msg.get("type") == "error":
+            raise RuntimeError(msg.get("message", "Errore sconosciuto nel worker"))
+        self._proc = proc
+
+    def stop(self) -> None:
+        """Ferma il subprocess worker."""
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            proc.stdin.write(json.dumps({"quit": True}) + "\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def is_running(self) -> bool:
+        """True se il subprocess worker è attivo."""
+        return self._proc is not None and self._proc.poll() is None
+
+    def _run_ocr(self, proc, file_path: str, on_progress, cancel_event, on_partial=None) -> str:
+        """Esegue OCR su file usando il proc già avviato."""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            return self._subprocess_pdf(file_path, proc, on_progress, cancel_event, on_partial)
+        return self._subprocess_image(file_path, proc, on_progress)
 
     def process(
         self,
@@ -473,106 +576,29 @@ class SuryaEngine:
     # ------------------------------------------------------------------
 
     def _process_subprocess(self, file_path, on_progress, cancel_event, on_partial=None) -> str:
-        """Esegue l'OCR nel Python esterno tramite surya_worker.py."""
-        worker = _worker_script_path()
-        if not os.path.isfile(worker):
-            raise FileNotFoundError(f"Worker Surya non trovato: {worker}")
+        """Esegue l'OCR nel Python esterno tramite il worker script.
 
-        # Costruisce un env pulito: rimuove le variabili che PyInstaller inietta
-        # nel processo principale. Se ereditate, causano un conflitto di DLL quando
-        # il worker gira su un Python diverso (surya-venv Python 3.12 vs bundle
-        # Python 3.14): Windows trova python314.dll nel PATH del bundle prima di
-        # python312.dll della venv, oppure le DLL del bundle vengono caricate
-        # al posto di quelle della venv Surya.
-        worker_env = os.environ.copy()
-        for _var in ("PYTHONHOME", "PYTHONPATH", "_MEIPASS2"):
-            worker_env.pop(_var, None)
-        # PyInstaller prepone sys._MEIPASS al PATH di os.environ per permettere
-        # il caricamento delle DLL del bundle. Il sottoprocesso eredita questo PATH:
-        # rimuove _MEIPASS per evitare che python314.dll venga trovato via PATH
-        # invece che tramite la directory dell'interprete Python 3.12 della venv.
-        if hasattr(sys, "_MEIPASS"):
-            _mei = os.path.normcase(sys._MEIPASS)
-            _path_parts = [
-                p for p in worker_env.get("PATH", "").split(os.pathsep)
-                if os.path.normcase(p) != _mei
-            ]
-            worker_env["PATH"] = os.pathsep.join(_path_parts)
-
-        proc = subprocess.Popen(
-            [self._python_exe, worker],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            env=worker_env,
-            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
-        )
-
-        # Drena stderr in background per evitare deadlock: PyTorch/tqdm/transformers
-        # scrivono avvisi su stderr; se il pipe buffer si riempie (~64 KB) il worker
-        # si blocca su stderr mentre l'app aspetta su stdout → deadlock.
-        stderr_lines: list[str] = []
-
-        def _drain_stderr():
-            try:
-                for line in proc.stderr:
-                    stderr_lines.append(line)
-            except Exception:
-                pass
-
-        threading.Thread(target=_drain_stderr, daemon=True).start()
-
+        Se il subprocess è già in esecuzione (daemon), lo riusa senza fermarlo.
+        Se lo avvia qui, lo ferma al termine (anche in caso di eccezione).
+        """
+        owns_proc = not self.is_running()
+        if owns_proc:
+            self.start()
         try:
-            # Attende l'inizializzazione dei modelli.
-            # Salta righe vuote o non-JSON che torch/transformers/tqdm
-            # possono scrivere su stdout durante il caricamento dei modelli.
-            msg = None
-            while msg is None:
-                ready_line = proc.stdout.readline()
-                if not ready_line:
-                    proc.wait()
-                    stderr = "".join(stderr_lines)
-                    raise RuntimeError(
-                        f"Il worker Surya non ha risposto.\n{stderr[:500]}"
-                    )
-                ready_line = ready_line.strip()
-                if not ready_line:
-                    continue
-                try:
-                    msg = json.loads(ready_line)
-                except json.JSONDecodeError:
-                    continue
-            if msg.get("type") == "error":
-                raise RuntimeError(msg.get("message", "Errore sconosciuto nel worker"))
-            # msg.type == "ready"
-
-            ext = os.path.splitext(file_path)[1].lower()
-            if ext == ".pdf":
-                result = self._subprocess_pdf(
-                    file_path, proc, on_progress, cancel_event, on_partial
-                )
-            else:
-                result = self._subprocess_image(file_path, proc, on_progress)
-
-        except InterruptedError:
-            proc.terminate()
-            raise
+            result = self._run_ocr(self._proc, file_path, on_progress, cancel_event, on_partial)
         except Exception:
-            proc.terminate()
+            self.stop()
             raise
-        finally:
-            try:
-                proc.stdin.close()
-            except Exception:
-                pass
-            proc.wait()
-
+        if owns_proc:
+            self.stop()
         return result
 
     def _send_image(self, proc, img_path: str, forced_angle) -> tuple:
-        """Invia un'immagine al worker e attende il risultato."""
+        """Invia un'immagine al worker e attende il risultato.
+
+        Restituisce (text, angle, html, blocks). html e blocks sono stringhe/liste
+        vuote per worker 0.17.x che non li producono.
+        """
         cmd = json.dumps({"path": img_path, "forced_angle": forced_angle})
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
@@ -590,10 +616,12 @@ class SuryaEngine:
                 continue
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore nel worker"))
-        return msg.get("text", ""), msg.get("angle")
+        return msg.get("text", ""), msg.get("angle"), msg.get("html", ""), msg.get("blocks", [])
 
     def _subprocess_image(self, file_path, proc, on_progress) -> str:
-        text, _ = self._send_image(proc, file_path, None)
+        text, _, html, blocks = self._send_image(proc, file_path, None)
+        self._last_html = html
+        self._last_blocks = [blocks] if blocks else []
         if on_progress:
             on_progress(1, 1)
         return text.strip()
@@ -603,6 +631,8 @@ class SuryaEngine:
         total = len(doc)
         tmp_dir = tempfile.mkdtemp(prefix="surya_ocr_")
         pages_text = []
+        pages_html = []
+        pages_blocks = []
         doc_angle: Optional[int] = None
 
         try:
@@ -610,14 +640,16 @@ class SuryaEngine:
                 if cancel_event and cancel_event.is_set():
                     raise InterruptedError("OCR interrotto dall'utente.")
 
-                pix = page.get_pixmap(dpi=150)
+                pix = page.get_pixmap(dpi=self._PDF_DPI)
                 img_path = os.path.join(tmp_dir, f"page_{i:04d}.png")
                 pix.save(img_path)
 
-                text, angle = self._send_image(proc, img_path, doc_angle)
+                text, angle, html, blocks = self._send_image(proc, img_path, doc_angle)
                 if doc_angle is None and angle is not None:
                     doc_angle = angle
                 pages_text.append(text.strip())
+                pages_html.append(html)
+                pages_blocks.append(blocks)
 
                 if on_partial:
                     on_partial("\f".join(pages_text))
@@ -632,6 +664,8 @@ class SuryaEngine:
             except Exception:
                 pass
 
+        self._last_html = '<hr class="page-break">\n'.join(pages_html)
+        self._last_blocks = pages_blocks
         return "\f".join(pages_text)
 
     # ------------------------------------------------------------------

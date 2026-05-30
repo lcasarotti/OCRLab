@@ -4,7 +4,8 @@ Protocollo stdin/stdout (una riga JSON per messaggio):
   IN:   {"path": "<path_immagine>", "forced_angle": null | int}
   IN:   {"quit": true}
   OUT:  {"type": "ready"}
-  OUT:  {"type": "result", "text": "<testo>", "angle": null | int}
+  OUT:  {"type": "result", "text": "<testo>", "angle": null | int,
+          "html": "<html_pagina>", "blocks": [{"label": ..., "html": ...}, ...]}
   OUT:  {"type": "error",  "message": "<messaggio>"}
 
 Differenze rispetto a surya_worker.py (0.17.x):
@@ -16,6 +17,7 @@ Differenze rispetto a surya_worker.py (0.17.x):
 - L'output è pred.blocks (ordinati per reading_order), niente FoundationPredictor
 - Nessuna patch transformers5, nessun DetectionPredictor separato
 - Estrazione testo via stripping HTML da block.html
+- Restituisce anche l'HTML strutturato della pagina e la lista blocchi
 """
 
 import json
@@ -46,8 +48,39 @@ def _blocks_to_text(blocks) -> str:
     return "\n\n".join(parts)
 
 
-def _ocr_page(img: Image.Image, rec_pred, layout_pred, forced_angle: Optional[int] = None) -> tuple:
-    """Restituisce (text, angle_applied).
+def _blocks_to_html(blocks) -> str:
+    """Assembla l'HTML della pagina dai blocchi Surya 0.20."""
+    sorted_blocks = sorted(
+        (b for b in blocks if not b.skipped and not b.error),
+        key=lambda b: b.reading_order,
+    )
+    parts = []
+    for block in sorted_blocks:
+        if block.label in _SKIP_LABELS:
+            continue
+        html = block.html.strip()
+        if html:
+            css = block.label.lower().replace(" ", "-").replace("_", "-")
+            parts.append(f'<div class="block {css}">{html}</div>')
+    return "\n".join(parts)
+
+
+def _blocks_to_structs(blocks) -> list:
+    """Lista di {label, html} per ogni blocco (per export strutturato DOCX)."""
+    sorted_blocks = sorted(
+        (b for b in blocks if not b.skipped and not b.error),
+        key=lambda b: b.reading_order,
+    )
+    return [
+        {"label": block.label, "html": block.html.strip()}
+        for block in sorted_blocks
+        if block.label not in _SKIP_LABELS and block.html.strip()
+    ]
+
+
+def _ocr_page(img: Image.Image, rec_pred, layout_pred,
+              forced_angle: Optional[int] = None) -> tuple:
+    """Restituisce (text, angle_applied, html, structs).
 
     Usa full_page=True (PROMPT_TYPE_HIGH_ACCURACY_BBOX): un'unica chiamata VLM
     sull'intera pagina, più accurata del block mode (PROMPT_TYPE_BLOCK).
@@ -58,10 +91,13 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred, forced_angle: Optional[in
     # Doppia pagina affiancata (landscape): divide a metà e processa ciascuna metà
     if forced_angle is None and img.size[0] > img.size[1] * 1.2:
         mid = img.size[0] // 2
-        left_text,  _ = _ocr_page(img.crop((0, 0, mid, img.size[1])), rec_pred, layout_pred)
-        right_text, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])), rec_pred, layout_pred)
-        combined = "\n\n".join(t for t in (left_text, right_text) if t)
-        return combined, None
+        l_text, _, l_html, l_structs = _ocr_page(
+            img.crop((0, 0, mid, img.size[1])), rec_pred, layout_pred)
+        r_text, _, r_html, r_structs = _ocr_page(
+            img.crop((mid, 0, img.size[0], img.size[1])), rec_pred, layout_pred)
+        combined_text = "\n\n".join(t for t in (l_text, r_text) if t)
+        combined_html = "\n".join(h for h in (l_html, r_html) if h)
+        return combined_text, None, combined_html, l_structs + r_structs
 
     angle_applied: Optional[int] = None
     if forced_angle is not None and forced_angle != 0:
@@ -69,12 +105,13 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred, forced_angle: Optional[in
         angle_applied = forced_angle
         if img.size[0] > img.size[1] * 1.2:
             mid = img.size[0] // 2
-            left_text,  _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
-                                      rec_pred, layout_pred, forced_angle=0)
-            right_text, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
-                                      rec_pred, layout_pred, forced_angle=0)
-            combined = "\n\n".join(t for t in (left_text, right_text) if t)
-            return combined, angle_applied
+            l_text, _, l_html, l_structs = _ocr_page(
+                img.crop((0, 0, mid, img.size[1])), rec_pred, layout_pred, forced_angle=0)
+            r_text, _, r_html, r_structs = _ocr_page(
+                img.crop((mid, 0, img.size[0], img.size[1])), rec_pred, layout_pred, forced_angle=0)
+            combined_text = "\n\n".join(t for t in (l_text, r_text) if t)
+            combined_html = "\n".join(h for h in (l_html, r_html) if h)
+            return combined_text, angle_applied, combined_html, l_structs + r_structs
 
     try:
         layouts = layout_pred([img])
@@ -84,8 +121,15 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred, forced_angle: Optional[in
         preds = rec_pred([img], full_page=True)
 
     if not preds or not preds[0].blocks:
-        return "", angle_applied
-    return _blocks_to_text(preds[0].blocks), angle_applied
+        return "", angle_applied, "", []
+
+    blocks = preds[0].blocks
+    return (
+        _blocks_to_text(blocks),
+        angle_applied,
+        _blocks_to_html(blocks),
+        _blocks_to_structs(blocks),
+    )
 
 
 def main():
@@ -120,8 +164,15 @@ def main():
 
         try:
             img = Image.open(path).convert("RGB")
-            text, angle = _ocr_page(img, rec_pred, layout_pred, forced_angle=forced_angle)
-            print(json.dumps({"type": "result", "text": text, "angle": angle}), flush=True)
+            text, angle, html, structs = _ocr_page(
+                img, rec_pred, layout_pred, forced_angle=forced_angle)
+            print(json.dumps({
+                "type": "result",
+                "text": text,
+                "angle": angle,
+                "html": html,
+                "blocks": structs,
+            }), flush=True)
         except Exception as e:
             print(json.dumps({"type": "error", "message": str(e)}), flush=True)
 

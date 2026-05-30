@@ -1,4 +1,4 @@
-"""Scrittura file di output (TXT, DOCX) con gestione dei tag markup di Surya.
+"""Scrittura file di output (TXT, DOCX, HTML) con gestione dei tag markup di Surya.
 
 Tag supportati (prodotti da Surya):
   <i>…</i>     → corsivo
@@ -6,10 +6,13 @@ Tag supportati (prodotti da Surya):
 
 Per .txt: <sup> → apice Unicode (¹²³…), <i> → testo nudo.
 Per .docx: formattazione Word nativa (corsivo e apice reali).
+Per .docx (Surya 0.20): rendering strutturato con heading, tabelle, caption, note.
+Per .html (Surya 0.20): HTML completo con CSS pronto per la visualizzazione.
 """
 
 import os
 import re
+from html.parser import HTMLParser
 
 import docx
 
@@ -20,6 +23,16 @@ _SUPERSCRIPT_MAP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 _TAG_RE = re.compile(r"(<i>.*?</i>|<sup>\d+</sup>|<math>.*?</math>)", re.DOTALL)
 # Pattern per <sup> eventualmente annidato dentro <i>
 _SUP_RE = re.compile(r"(<sup>\d+</sup>)")
+
+# Stili Word per etichette Surya 0.20
+_BLOCK_STYLE = {
+    "Title": "Heading 1",
+    "Section-header": "Heading 2",
+    "Caption": "Caption",
+}
+
+# Etichette da saltare nel DOCX (intestazioni/piè pagina scansionati)
+_SKIP_DOCX_LABELS = frozenset({"Picture", "Figure", "Page-header", "Page-footer"})
 
 
 def strip_markup(text: str) -> str:
@@ -95,26 +108,178 @@ def _add_markup_runs(para, text: str) -> None:
             _flush(segment)
 
 
+# ---------------------------------------------------------------------------
+# Funzioni per l'export strutturato Surya 0.20
+# ---------------------------------------------------------------------------
+
+def _html_to_markup(html: str) -> str:
+    """Converte l'HTML di un blocco Surya nel markup semplificato (<i>, <sup>)."""
+    html = re.sub(r'<em[^>]*>', '<i>', html, flags=re.IGNORECASE)
+    html = re.sub(r'</em>', '</i>', html, flags=re.IGNORECASE)
+    # Grassetto: rimuovi i tag wrappanti (nessun grassetto nel markup)
+    html = re.sub(r'<b[^>]*>(.*?)</b>', r'\1', html, flags=re.IGNORECASE | re.DOTALL)
+    html = re.sub(r'<strong[^>]*>(.*?)</strong>', r'\1', html, flags=re.IGNORECASE | re.DOTALL)
+    # Interruzioni di riga e separatori paragrafo
+    html = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
+    html = re.sub(r'</p>\s*<p[^>]*>', '\n', html, flags=re.IGNORECASE)
+    html = re.sub(r'<p[^>]*>|</p>', '', html, flags=re.IGNORECASE)
+    # Liste: converti <li> in righe
+    html = re.sub(r'<li[^>]*>', '• ', html, flags=re.IGNORECASE)
+    html = re.sub(r'</li>', '\n', html, flags=re.IGNORECASE)
+    html = re.sub(r'<[ou]l[^>]*>|</[ou]l>', '', html, flags=re.IGNORECASE)
+    # Math: mantieni solo il contenuto
+    html = re.sub(r'<math[^>]*>(.*?)</math>', r'\1', html, flags=re.IGNORECASE | re.DOTALL)
+    # Preserva <i>, </i>, <sup>N</sup> tramite placeholder prima di strippare
+    html = html.replace('<i>', '\x00ITAG\x00')
+    html = html.replace('</i>', '\x00EITAG\x00')
+    html = re.sub(r'<sup>(\d+)</sup>', r'\x00SUP\1\x00', html)
+    html = re.sub(r'<[^>]+>', '', html)
+    html = html.replace('\x00ITAG\x00', '<i>')
+    html = html.replace('\x00EITAG\x00', '</i>')
+    html = re.sub(r'\x00SUP(\d+)\x00', r'<sup>\1</sup>', html)
+    return html.strip()
+
+
+class _TableParser(HTMLParser):
+    """Parser minimale per estrarre righe e celle da un frammento HTML di tabella."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self._in_row = False
+        self._in_cell = False
+        self._cell_buf = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self._in_row = True
+            self.rows.append([])
+        elif tag in ("td", "th") and self._in_row:
+            self._in_cell = True
+            self._cell_buf = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._in_cell:
+            self.rows[-1].append("".join(self._cell_buf).strip())
+            self._in_cell = False
+            self._cell_buf = []
+        elif tag == "tr":
+            self._in_row = False
+
+    def handle_data(self, data):
+        if self._in_cell:
+            self._cell_buf.append(data)
+
+
+def _add_html_table(doc, html: str) -> None:
+    """Aggiunge una tabella Word da un frammento HTML <table>."""
+    parser = _TableParser()
+    parser.feed(html)
+    rows = [r for r in parser.rows if r]
+    if not rows:
+        return
+    ncols = max(len(r) for r in rows)
+    if ncols == 0:
+        return
+    table = doc.add_table(rows=len(rows), cols=ncols)
+    table.style = "Table Grid"
+    for r_idx, row_data in enumerate(rows):
+        for c_idx, cell_text in enumerate(row_data):
+            if c_idx < ncols:
+                table.rows[r_idx].cells[c_idx].text = cell_text
+
+
+def _add_block_to_docx(doc, block: dict) -> None:
+    """Aggiunge un blocco Surya 0.20 al documento Word."""
+    label = block.get("label", "Text")
+    html = block.get("html", "")
+    if not html or label in _SKIP_DOCX_LABELS:
+        return
+
+    if label == "Table":
+        _add_html_table(doc, html)
+        return
+
+    markup = _html_to_markup(html)
+    if not markup:
+        return
+
+    if label == "List-item":
+        para = doc.add_paragraph(style="List Bullet")
+    elif label == "Footnote":
+        para = doc.add_paragraph(style="Normal")
+        para.add_run("— ").italic = True
+    else:
+        style = _BLOCK_STYLE.get(label, "Normal")
+        para = doc.add_paragraph(style=style)
+
+    _add_markup_runs(para, markup)
+
+
+# ---------------------------------------------------------------------------
+# Funzioni di scrittura file
+# ---------------------------------------------------------------------------
+
 def write_txt(text: str, path: str) -> None:
     """Salva il testo come file UTF-8, convertendo i tag in Unicode."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(_convert_markup(text))
 
 
-def write_docx(text: str, path: str) -> None:
-    """Salva il testo come .docx con corsivo, apici e interruzioni di pagina Word nativi."""
+def write_docx(text: str, path: str, blocks=None) -> None:
+    """Salva il testo come .docx.
+
+    Se blocks è fornito (list[list[dict]] da Surya 0.20), usa il rendering
+    strutturato con heading, tabelle e stili semantici. Altrimenti usa il
+    rendering flat con corsivo, apici e interruzioni di pagina Word nativi.
+    """
     doc = docx.Document()
-    pages = text.split("\f")
-    for page_idx, page_text in enumerate(pages):
-        if page_idx > 0:
-            doc.add_page_break()
-        for para_text in page_text.split("\n\n"):
-            para_text = para_text.strip()
-            if not para_text:
-                continue
-            para = doc.add_paragraph()
-            _add_markup_runs(para, para_text)
+    if blocks:
+        for page_idx, page_blocks in enumerate(blocks):
+            if page_idx > 0:
+                doc.add_page_break()
+            for block in page_blocks:
+                _add_block_to_docx(doc, block)
+    else:
+        pages = text.split("\f")
+        for page_idx, page_text in enumerate(pages):
+            if page_idx > 0:
+                doc.add_page_break()
+            for para_text in page_text.split("\n\n"):
+                para_text = para_text.strip()
+                if not para_text:
+                    continue
+                para = doc.add_paragraph()
+                _add_markup_runs(para, para_text)
     doc.save(path)
+
+
+def write_html(html: str, path: str) -> None:
+    """Salva l'HTML strutturato Surya 0.20 come file .html con wrapper CSS."""
+    content = (
+        '<!DOCTYPE html>\n<html lang="it">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<title>OCR Lab — risultato</title>\n'
+        '<style>\n'
+        '  body { font-family: Georgia, serif; max-width: 900px; margin: 2em auto;'
+        ' padding: 0 1em; line-height: 1.5; }\n'
+        '  .title { font-size: 1.6em; font-weight: bold; margin: 0.8em 0 0.4em; }\n'
+        '  .section-header { font-size: 1.25em; font-weight: bold; margin: 1em 0 0.4em; }\n'
+        '  .caption { font-size: 0.9em; font-style: italic; color: #555; }\n'
+        '  .footnote { font-size: 0.85em; border-top: 1px solid #ccc;'
+        ' margin-top: 1.5em; padding-top: 0.5em; color: #444; }\n'
+        '  .page-header, .page-footer { font-size: 0.8em; color: #888; }\n'
+        '  .formula { font-style: italic; }\n'
+        '  table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n'
+        '  td, th { border: 1px solid #bbb; padding: 4px 8px; }\n'
+        '  th { background: #f0f0f0; font-weight: bold; }\n'
+        '  hr.page-break { border: none; border-top: 2px dashed #aaa; margin: 2em 0; }\n'
+        '</style>\n</head>\n<body>\n'
+        + html
+        + '\n</body>\n</html>'
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
 
 
 def _utf16be_hex(text: str) -> str:
@@ -312,11 +477,16 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None
         out_doc.close()
 
 
-def write_file(text: str, path: str, source_path: str = "") -> None:
-    """Salva il testo in base all'estensione del file."""
+def write_file(text: str, path: str, source_path: str = "",
+               blocks=None, html: str = "") -> None:
+    """Salva il testo in base all'estensione del file.
+
+    blocks: list[list[dict]] da Surya 0.20 (passato a write_docx per layout strutturato).
+    html:   HTML grezzo da Surya 0.20 (necessario per l'esportazione .html).
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".docx":
-        write_docx(text, path)
+        write_docx(text, path, blocks=blocks)
     elif ext == ".txt":
         write_txt(text, path)
     elif ext == ".pdf":
@@ -325,5 +495,11 @@ def write_file(text: str, path: str, source_path: str = "") -> None:
                 "Per il PDF ricercabile è necessario il percorso del file sorgente."
             )
         write_searchable_pdf(source_path, text, path)
+    elif ext == ".html":
+        if not html:
+            raise ValueError(
+                "L'esportazione HTML è disponibile solo con il motore Surya 0.2."
+            )
+        write_html(html, path)
     else:
         raise ValueError(f"Formato non supportato: {ext}")
