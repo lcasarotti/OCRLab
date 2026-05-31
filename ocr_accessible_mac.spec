@@ -57,8 +57,9 @@ for _lang in _BUNDLED_LANGS:
 if os.path.isdir(os.path.join(BASE, "locale")):
     datas.append(("locale", "locale"))
 
-# surya_worker.py: eseguito dal Python del surya-venv esterno
+# surya_worker.py / surya20_worker.py: eseguiti dal Python dei venv esterni
 datas.append(("app/engine/surya_worker.py", "."))
+datas.append(("app/engine/surya20_worker.py", "."))
 
 # apple_vision_helper.swift: avviato a runtime tramite `swift`
 datas.append(("app/engine/apple_vision_helper.swift", "."))

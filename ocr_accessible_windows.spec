@@ -56,8 +56,9 @@ datas = list(_pymupdf_datas)
 if os.path.isdir(os.path.join(BASE, "locale")):
     datas.append(("locale", "locale"))
 
-# surya_worker.py: eseguito dal Python del surya-venv esterno
+# surya_worker.py / surya20_worker.py: eseguiti dal Python dei venv esterni
 datas.append(("app/engine/surya_worker.py", "."))
+datas.append(("app/engine/surya20_worker.py", "."))
 
 # accessible_output2: contiene le DLL per i vari screen reader Windows
 if VENV_SP:

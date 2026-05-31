@@ -312,6 +312,8 @@ DEFAULTS = {
     "vlm_model": "",
     "windows_ocr_lang": "it-IT",
     "surya_python": "",
+    "surya20_python": "",
+    "skip_surya20_check": False,
     "chandra_python": "",
     "chandra_method": "vllm",
     "chandra_vllm_url": "http://localhost:8000",

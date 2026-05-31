@@ -21,14 +21,14 @@ _OCR_ENGINE_KEYS = (
     ["tesseract", "vlm"]
     + (["windows"] if _IS_WINDOWS else [])
     + (["apple_vision"] if _IS_MACOS else [])
-    + ["surya"]
+    + ["surya", "surya20"]
     + (["chandra"] if ENABLE_CHANDRA else [])
 )
 _OCR_ENGINE_LABELS = (
     ["Tesseract", "Ollama Vision"]
     + (["Windows OCR"] if _IS_WINDOWS else [])
     + (["Apple Vision (macOS)"] if _IS_MACOS else [])
-    + ["Surya"]
+    + ["Surya 0.1", "Surya 0.2 (requires Docker / llama.cpp)"]
     + (["Chandra"] if ENABLE_CHANDRA else [])
 )
 _ENGINE_TO_IDX = {k: i for i, k in enumerate(_OCR_ENGINE_KEYS)}
@@ -66,11 +66,18 @@ class SettingsPanel(wx.Panel):
         self._ocr_box = wx.StaticBox(self, label="OCR")
         self._ocr_sizer = wx.StaticBoxSizer(self._ocr_box, wx.VERTICAL)
 
+        _ocr_labels = (
+            ["Tesseract", "Ollama Vision"]
+            + (["Windows OCR"] if _IS_WINDOWS else [])
+            + (["Apple Vision (macOS)"] if _IS_MACOS else [])
+            + ["Surya 0.1", _("Surya 0.2 (requires Docker / llama.cpp)")]
+            + (["Chandra"] if ENABLE_CHANDRA else [])
+        )
         self.rb_ocr_engine = wx.RadioBox(
             self,
             label=_("OCR Engine"),
-            choices=_OCR_ENGINE_LABELS,
-            majorDimension=len(_OCR_ENGINE_LABELS),
+            choices=_ocr_labels,
+            majorDimension=len(_ocr_labels),
             style=wx.RA_SPECIFY_COLS,
         )
         self._ocr_sizer.Add(self.rb_ocr_engine, 0, wx.EXPAND | wx.ALL, 5)
@@ -151,6 +158,32 @@ class SettingsPanel(wx.Panel):
                     "Supports multi-column layout via reading order detection."),
         )
         self._ocr_sizer.Add(self.lbl_surya_note, 0, wx.LEFT | wx.BOTTOM, 5)
+
+        self.row_surya20_python = wx.BoxSizer(wx.HORIZONTAL)
+        self.lbl_surya20_python = wx.StaticText(self, label=_("Python for Surya 0.2:"))
+        self.row_surya20_python.Add(self.lbl_surya20_python, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.txt_surya20_python = wx.TextCtrl(self, size=(380, -1))
+        self.row_surya20_python.Add(self.txt_surya20_python, 1, wx.EXPAND | wx.RIGHT, 5)
+        self.btn_browse_surya20_python = wx.Button(self, label=_("Browse..."))
+        self.row_surya20_python.Add(self.btn_browse_surya20_python, 0)
+        self._ocr_sizer.Add(self.row_surya20_python, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.lbl_surya20_note = wx.StaticText(
+            self,
+            label=_("Surya 0.2 requires Docker Desktop (NVIDIA GPU) or llama.cpp (CPU / Apple Silicon).\n"
+                    "The inference backend must be installed separately before running OCR."),
+        )
+        self._ocr_sizer.Add(self.lbl_surya20_note, 0, wx.LEFT | wx.BOTTOM, 5)
+
+        self.row_surya20_server = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_surya20_start = wx.Button(self, label=_("Start server"))
+        self.row_surya20_server.Add(self.btn_surya20_start, 0, wx.RIGHT, 5)
+        self.btn_surya20_stop = wx.Button(self, label=_("Stop server"))
+        self.btn_surya20_stop.Enable(False)
+        self.row_surya20_server.Add(self.btn_surya20_stop, 0, wx.RIGHT, 10)
+        self.lbl_surya20_server_status = wx.StaticText(self, label=_("Server not started."))
+        self.row_surya20_server.Add(self.lbl_surya20_server_status, 0, wx.ALIGN_CENTER_VERTICAL)
+        self._ocr_sizer.Add(self.row_surya20_server, 0, wx.ALL, 5)
 
         if _IS_MACOS:
             self.lbl_apple_vision_note = wx.StaticText(
@@ -390,6 +423,9 @@ class SettingsPanel(wx.Panel):
         # ---- Bind ----
         self.btn_browse_tesseract.Bind(wx.EVT_BUTTON, self._on_browse_tesseract)
         self.btn_browse_surya_python.Bind(wx.EVT_BUTTON, self._on_browse_surya_python)
+        self.btn_browse_surya20_python.Bind(wx.EVT_BUTTON, self._on_browse_surya20_python)
+        self.btn_surya20_start.Bind(wx.EVT_BUTTON, self._on_surya20_start)
+        self.btn_surya20_stop.Bind(wx.EVT_BUTTON, self._on_surya20_stop)
         self.btn_browse_chandra_python.Bind(wx.EVT_BUTTON, self._on_browse_chandra_python)
         self.rb_chandra_method.Bind(wx.EVT_RADIOBOX, self._on_ocr_engine_changed)
         self.btn_detect_wsl_ip.Bind(wx.EVT_BUTTON, self._on_detect_wsl_ip)
@@ -445,6 +481,7 @@ class SettingsPanel(wx.Panel):
         is_windows = sel == _ENGINE_TO_IDX.get("windows", -1)
         is_apple_vision = sel == _ENGINE_TO_IDX.get("apple_vision", -1)
         is_surya = sel == _ENGINE_TO_IDX.get("surya", -1)
+        is_surya20 = sel == _ENGINE_TO_IDX.get("surya20", -1)
         is_chandra = ENABLE_CHANDRA and sel == _ENGINE_TO_IDX.get("chandra", -1)
         self.lbl_tesseract_path.Show(is_tesseract)
         self.txt_tesseract_path.Show(is_tesseract)
@@ -470,6 +507,15 @@ class SettingsPanel(wx.Panel):
         self.txt_surya_python.Show(is_surya)
         self.btn_browse_surya_python.Show(is_surya)
         self.lbl_surya_note.Show(is_surya)
+        self.lbl_surya20_python.Show(is_surya20)
+        self.txt_surya20_python.Show(is_surya20)
+        self.btn_browse_surya20_python.Show(is_surya20)
+        self.lbl_surya20_note.Show(is_surya20)
+        self.btn_surya20_start.Show(is_surya20)
+        self.btn_surya20_stop.Show(is_surya20)
+        self.lbl_surya20_server_status.Show(is_surya20)
+        if is_surya20:
+            self._update_surya20_server_ui()
         self.lbl_chandra_method.Show(is_chandra)
         self.rb_chandra_method.Show(is_chandra)
         self.lbl_chandra_note.Show(is_chandra)
@@ -641,6 +687,7 @@ class SettingsPanel(wx.Panel):
         self.rb_ocr_engine.SetSelection(sel)
         self.cmb_vlm_model.SetValue(self.config.get("vlm_model", ""))
         self.txt_surya_python.SetValue(self.config.get("surya_python", ""))
+        self.txt_surya20_python.SetValue(self.config.get("surya20_python", ""))
         self.txt_chandra_python.SetValue(self.config.get("chandra_python", ""))
         chandra_method = self.config.get("chandra_method", "vllm")
         self.rb_chandra_method.SetSelection(0 if chandra_method == "vllm" else 1)
@@ -731,6 +778,70 @@ class SettingsPanel(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             self.txt_surya_python.SetValue(dlg.GetPath())
         dlg.Destroy()
+
+    def _on_browse_surya20_python(self, _event):
+        if _IS_WINDOWS:
+            title = _("Select python.exe of the venv with Surya 0.2")
+            wildcard = _("Executables (*.exe)|*.exe")
+        else:
+            title = _("Select Python executable of the venv with Surya 0.2")
+            wildcard = _("All files (*)|*")
+        dlg = wx.FileDialog(
+            self, title, wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            self.txt_surya20_python.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
+    def _update_surya20_server_ui(self):
+        from app.engine.surya20_engine import Surya20Engine
+        running = Surya20Engine.is_daemon_running()
+        self.btn_surya20_start.Enable(not running)
+        self.btn_surya20_stop.Enable(running)
+        label = _("Server ready.") if running else _("Server not started.")
+        self.lbl_surya20_server_status.SetLabel(label)
+
+    def _on_surya20_start(self, _event):
+        from app.engine.surya20_engine import Surya20Engine
+        python_exe = self.txt_surya20_python.GetValue()
+        self.btn_surya20_start.Enable(False)
+        self.btn_surya20_stop.Enable(False)
+        self.lbl_surya20_server_status.SetLabel(_("Starting..."))
+        self.main_frame.set_status(_("Starting Surya 0.2 server..."))
+        self._speak(_("Starting Surya 0.2 server."))
+
+        def _run():
+            try:
+                Surya20Engine.start_daemon(python_exe=python_exe)
+                wx.CallAfter(self._surya20_server_ready)
+            except Exception as e:
+                wx.CallAfter(self._surya20_server_failed, str(e))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _surya20_server_ready(self):
+        self.btn_surya20_start.Enable(False)
+        self.btn_surya20_stop.Enable(True)
+        self.lbl_surya20_server_status.SetLabel(_("Server ready."))
+        self.main_frame.set_status(_("Surya 0.2 server ready."))
+        self._speak(_("Surya 0.2 server ready."))
+
+    def _surya20_server_failed(self, msg: str):
+        self.btn_surya20_start.Enable(True)
+        self.btn_surya20_stop.Enable(False)
+        self.lbl_surya20_server_status.SetLabel(_("Error: {error}").format(error=msg[:60]))
+        self.main_frame.set_status(_("Surya 0.2 server error: {msg}").format(msg=msg))
+        self._speak(_("Surya 0.2 server startup error."))
+        wx.MessageBox(msg, _("Surya 0.2 server error"), wx.OK | wx.ICON_ERROR)
+
+    def _on_surya20_stop(self, _event):
+        from app.engine.surya20_engine import Surya20Engine
+        Surya20Engine.stop_daemon()
+        self.btn_surya20_start.Enable(True)
+        self.btn_surya20_stop.Enable(False)
+        self.lbl_surya20_server_status.SetLabel(_("Server stopped."))
+        self.main_frame.set_status(_("Surya 0.2 server stopped."))
+        self._speak(_("Surya 0.2 server stopped."))
 
     def _on_detect_wsl_ip(self, _event):
         import subprocess
@@ -1030,6 +1141,7 @@ class SettingsPanel(wx.Panel):
         self.config["ocr_engine"] = _IDX_TO_ENGINE.get(self.rb_ocr_engine.GetSelection(), "tesseract")
         self.config["vlm_model"] = self.cmb_vlm_model.GetValue()
         self.config["surya_python"] = self.txt_surya_python.GetValue()
+        self.config["surya20_python"] = self.txt_surya20_python.GetValue()
         self.config["chandra_python"] = self.txt_chandra_python.GetValue()
         self.config["chandra_method"] = "vllm" if self.rb_chandra_method.GetSelection() == 0 else "hf"
         self.config["chandra_vllm_url"] = self.txt_chandra_vllm_url.GetValue()
@@ -1070,6 +1182,7 @@ class SettingsPanel(wx.Panel):
             "ocr_engine": _IDX_TO_ENGINE.get(self.rb_ocr_engine.GetSelection(), "tesseract"),
             "vlm_model": self.cmb_vlm_model.GetValue(),
             "surya_python": self.txt_surya_python.GetValue(),
+            "surya20_python": self.txt_surya20_python.GetValue(),
             "chandra_python": self.txt_chandra_python.GetValue(),
             "chandra_method": "vllm" if self.rb_chandra_method.GetSelection() == 0 else "hf",
             "chandra_vllm_url": self.txt_chandra_vllm_url.GetValue(),

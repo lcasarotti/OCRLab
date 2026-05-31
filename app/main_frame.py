@@ -24,6 +24,8 @@ ID_STREAMING_TEXT = wx.NewIdRef()
 ID_VOICE_ANNOUNCEMENTS = wx.NewIdRef()
 ID_INSTALL_SURYA = wx.NewIdRef()
 ID_UNINSTALL_SURYA = wx.NewIdRef()
+ID_INSTALL_SURYA20 = wx.NewIdRef()
+ID_UNINSTALL_SURYA20 = wx.NewIdRef()
 ID_INSTALL_TESSERACT = wx.NewIdRef()
 ID_TESSERACT_LANGS = wx.NewIdRef()
 ID_CHECK_UPDATES = wx.NewIdRef()
@@ -87,8 +89,11 @@ class MainFrame(wx.Frame):
         menu_bar.Append(ops_menu, _("&Operations"))
 
         tools_menu = wx.Menu()
-        tools_menu.Append(ID_INSTALL_SURYA, _("Install Surya OCR..."))
-        tools_menu.Append(ID_UNINSTALL_SURYA, _("Uninstall Surya OCR..."))
+        tools_menu.Append(ID_INSTALL_SURYA, _("Install Surya 0.1..."))
+        tools_menu.Append(ID_UNINSTALL_SURYA, _("Uninstall Surya 0.1..."))
+        tools_menu.AppendSeparator()
+        tools_menu.Append(ID_INSTALL_SURYA20, _("Install Surya 0.2 (requires Docker / llama.cpp)..."))
+        tools_menu.Append(ID_UNINSTALL_SURYA20, _("Uninstall Surya 0.2..."))
         tools_menu.AppendSeparator()
         if not _IS_MAC:
             tools_menu.Append(ID_INSTALL_TESSERACT, _("Install Tesseract OCR..."))
@@ -150,6 +155,8 @@ class MainFrame(wx.Frame):
             self.Bind(wx.EVT_MENU, self._on_toggle_voice, id=ID_VOICE_ANNOUNCEMENTS)
         self.Bind(wx.EVT_MENU, self._on_install_surya, id=ID_INSTALL_SURYA)
         self.Bind(wx.EVT_MENU, self._on_uninstall_surya, id=ID_UNINSTALL_SURYA)
+        self.Bind(wx.EVT_MENU, self._on_install_surya20, id=ID_INSTALL_SURYA20)
+        self.Bind(wx.EVT_MENU, self._on_uninstall_surya20, id=ID_UNINSTALL_SURYA20)
         if not _IS_MAC:
             self.Bind(wx.EVT_MENU, self._on_install_tesseract, id=ID_INSTALL_TESSERACT)
         self.Bind(wx.EVT_MENU, self._on_tesseract_langs, id=ID_TESSERACT_LANGS)
@@ -266,14 +273,60 @@ class MainFrame(wx.Frame):
             from app.engine.surya_installer import _SURYA_VENV_DIR
             venv_path = _SURYA_VENV_DIR
             wx.MessageBox(
-                _("Surya OCR is already installed.\n\nVenv: {path}").format(path=venv_path),
-                _("Surya OCR"),
+                _("Surya 0.1 is already installed.\n\nVenv: {path}").format(path=venv_path),
+                _("Surya 0.1"),
                 wx.OK | wx.ICON_INFORMATION,
             )
             return
         dlg = SuryaInstallDialog(self)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _on_install_surya20(self, _event):
+        from app.engine.surya20_installer import is_surya20_installed, Surya20InstallDialog
+        from app.engine.surya20_installer import _SURYA20_VENV_DIR
+        if is_surya20_installed():
+            wx.MessageBox(
+                _("Surya 0.2 is already installed.\n\nVenv: {path}").format(path=_SURYA20_VENV_DIR),
+                _("Surya 0.2"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        dlg = Surya20InstallDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_uninstall_surya20(self, _event):
+        from app.engine.surya20_installer import uninstall_surya20, _SURYA20_VENV_DIR
+        if not os.path.isdir(_SURYA20_VENV_DIR):
+            wx.MessageBox(
+                _("Surya 0.2 is not installed."),
+                _("Uninstall Surya 0.2"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        with wx.MessageDialog(
+            self,
+            _("The Surya 0.2 venv directory will be deleted.\nContinue?"),
+            _("Uninstall Surya 0.2"),
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        ) as dlg:
+            dlg.SetYesNoLabels(_("Yes"), _("No"))
+            if dlg.ShowModal() != wx.ID_YES:
+                return
+        ok, msg = uninstall_surya20()
+        if ok:
+            wx.MessageBox(
+                _("Surya 0.2 uninstalled successfully."),
+                _("Uninstall complete"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+        else:
+            wx.MessageBox(
+                _("Error during uninstallation:\n{msg}").format(msg=msg),
+                _("Error"),
+                wx.OK | wx.ICON_ERROR,
+            )
 
     def _on_install_tesseract(self, _event):
         from app.engine.tesseract_setup import install_tesseract_interactive
@@ -289,15 +342,15 @@ class MainFrame(wx.Frame):
         from app.engine.surya_installer import uninstall_surya, _SURYA_VENV_DIR
         if not os.path.isdir(_SURYA_VENV_DIR):
             wx.MessageBox(
-                _("Surya OCR is not installed."),
-                _("Uninstall Surya OCR"),
+                _("Surya 0.1 is not installed."),
+                _("Uninstall Surya 0.1"),
                 wx.OK | wx.ICON_INFORMATION,
             )
             return
         with wx.MessageDialog(
             self,
-            _("The Surya OCR venv directory will be deleted.\nContinue?"),
-            _("Uninstall Surya OCR"),
+            _("The Surya 0.1 venv directory will be deleted.\nContinue?"),
+            _("Uninstall Surya 0.1"),
             wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
         ) as dlg:
             dlg.SetYesNoLabels(_("Yes"), _("No"))
@@ -306,7 +359,7 @@ class MainFrame(wx.Frame):
         ok, msg = uninstall_surya()
         if ok:
             wx.MessageBox(
-                _("Surya OCR uninstalled successfully."),
+                _("Surya 0.1 uninstalled successfully."),
                 _("Uninstall complete"),
                 wx.OK | wx.ICON_INFORMATION,
             )
