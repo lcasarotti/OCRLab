@@ -146,8 +146,8 @@ app = BUNDLE(
     icon=None,          # sostituire con "app/resources/ocrlab.icns" quando disponibile
     bundle_identifier="it.lucacasarotti.ocrlab",
     info_plist={
-        "CFBundleShortVersionString": "0.1.1",
-        "CFBundleVersion": "2",
+        "CFBundleShortVersionString": "0.2.0",
+        "CFBundleVersion": "3",
         "NSHighResolutionCapable": True,
         "NSMicrophoneUsageDescription": "Non richiesto.",
         # Permesso per leggere file scelti dall'utente tramite dialogo
