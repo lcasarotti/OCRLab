@@ -132,6 +132,19 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred,
     )
 
 
+def _warmup(rec_pred, layout_pred) -> None:
+    """Esegue un'inferenza fittizia per caricare i modelli in memoria prima di ready."""
+    dummy = Image.new("RGB", (64, 64), color=(255, 255, 255))
+    try:
+        layouts = layout_pred([dummy])
+        rec_pred([dummy], layouts, full_page=True)
+    except Exception:
+        try:
+            rec_pred([dummy], full_page=True)
+        except Exception:
+            pass
+
+
 def main():
     try:
         from surya.inference import SuryaInferenceManager
@@ -144,6 +157,8 @@ def main():
         print(json.dumps({"type": "error", "message": f"Inizializzazione Surya 0.20 fallita: {e}"}),
               flush=True)
         sys.exit(1)
+
+    _warmup(rec_pred, layout_pred)
 
     print(json.dumps({"type": "ready"}), flush=True)
 
