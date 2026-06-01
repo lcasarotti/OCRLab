@@ -465,6 +465,12 @@ class SuryaEngine:
                 if os.path.normcase(p) != _mei
             ]
             worker_env["PATH"] = os.pathsep.join(_path_parts)
+        if sys.platform == "darwin":
+            _extra = ["/opt/homebrew/bin", "/usr/local/bin"]
+            _current = worker_env.get("PATH", "").split(os.pathsep)
+            _additions = [p for p in _extra if p not in _current]
+            if _additions:
+                worker_env["PATH"] = os.pathsep.join(_additions + _current)
         return worker_env
 
     def start(self) -> None:
