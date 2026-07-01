@@ -314,6 +314,8 @@ DEFAULTS = {
     "surya_python": "",
     "surya20_python": "",
     "skip_surya20_check": False,
+    "surya20_batch_size": 4,
+    "surya20_parallel": 8,
     "chandra_python": "",
     "chandra_method": "vllm",
     "chandra_vllm_url": "http://localhost:8000",

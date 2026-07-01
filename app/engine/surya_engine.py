@@ -447,6 +447,7 @@ class SuryaEngine:
         self._stderr_lines: list[str] = []
         self._last_html: str = ""
         self._last_blocks: list = []
+        self._supports_batch: bool = False
 
     def _get_worker_path(self) -> str:
         """Percorso del worker script per questo engine."""
@@ -520,6 +521,7 @@ class SuryaEngine:
                 continue
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore sconosciuto nel worker"))
+        self._supports_batch = bool(msg.get("batch"))
         self._proc = proc
 
     def stop(self) -> None:
@@ -623,6 +625,35 @@ class SuryaEngine:
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore nel worker"))
         return msg.get("text", ""), msg.get("angle"), msg.get("html", ""), msg.get("blocks", [])
+
+    def _send_batch(self, proc, paths: list, forced_angle) -> list:
+        """Invia un batch di immagini al worker e attende i risultati.
+
+        Restituisce una lista di (text, angle, html, blocks), una per path,
+        nello stesso ordine di input.
+        """
+        cmd = json.dumps({"paths": list(paths), "forced_angle": forced_angle})
+        proc.stdin.write(cmd + "\n")
+        proc.stdin.flush()
+        msg = None
+        while msg is None:
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError("Il worker Surya ha smesso di rispondere.")
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+        if msg.get("type") == "error":
+            raise RuntimeError(msg.get("message", "Errore nel worker"))
+        items = msg.get("items", [])
+        return [
+            (it.get("text", ""), it.get("angle"), it.get("html", ""), it.get("blocks", []))
+            for it in items
+        ]
 
     def _subprocess_image(self, file_path, proc, on_progress) -> str:
         text, _, html, blocks = self._send_image(proc, file_path, None)

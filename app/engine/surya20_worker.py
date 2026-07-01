@@ -78,6 +78,134 @@ def _blocks_to_structs(blocks) -> list:
     ]
 
 
+def _is_landscape(img: Image.Image) -> bool:
+    """True se l'immagine è chiaramente landscape (doppia pagina affiancata)."""
+    return img.size[0] > img.size[1] * 1.2
+
+
+def _split_subimages(img: Image.Image, forced_angle: Optional[int] = None) -> tuple:
+    """Applica rotazione e split doppia-pagina, restituendo le sotto-immagini.
+
+    Restituisce (subimgs, angle_applied) dove subimgs è una lista di 1 o 2
+    immagini portrait pronte per l'inferenza (metà sinistra/destra per le
+    pagine landscape affiancate). Centralizza la logica di split/rotazione
+    così da poterla riusare sia nel percorso singolo che in quello batch.
+    """
+    angle_applied: Optional[int] = None
+
+    if forced_angle is not None and forced_angle != 0:
+        img = img.rotate(forced_angle, expand=True)
+        angle_applied = forced_angle
+
+    # Doppia pagina affiancata (landscape): divide a metà.
+    # Con forced_angle==None lo split è sempre ammesso; dopo una rotazione
+    # esplicita lo split resta ammesso (le due metà si processano dritte).
+    if _is_landscape(img):
+        mid = img.size[0] // 2
+        left = img.crop((0, 0, mid, img.size[1]))
+        right = img.crop((mid, 0, img.size[0], img.size[1]))
+        return [left, right], angle_applied
+
+    return [img], angle_applied
+
+
+def _combine_subresults(subresults: list, angle_applied: Optional[int]) -> tuple:
+    """Combina i risultati (text, html, structs) di 1 o 2 sotto-immagini.
+
+    subresults è una lista di tuple (text, html, structs) nell'ordine
+    sinistra→destra. Restituisce (text, angle, html, structs) per la pagina.
+    """
+    texts = [t for t, _, _ in subresults if t]
+    htmls = [h for _, h, _ in subresults if h]
+    structs = []
+    for _, _, s in subresults:
+        structs.extend(s)
+    return "\n\n".join(texts), angle_applied, "\n".join(htmls), structs
+
+
+def _pred_to_result(pred) -> tuple:
+    """Estrae (text, html, structs) da una predizione full_page (o pred vuota)."""
+    if pred is None or not getattr(pred, "blocks", None):
+        return "", "", []
+    blocks = pred.blocks
+    return _blocks_to_text(blocks), _blocks_to_html(blocks), _blocks_to_structs(blocks)
+
+
+def _infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
+    """Esegue l'inferenza full_page su una singola sotto-immagine.
+
+    Restituisce (text, html, structs).
+    """
+    try:
+        layouts = layout_pred([img])
+        # full_page=True: percorso più accurato; layouts funge da fallback automatico
+        preds = rec_pred([img], layouts, full_page=True)
+    except Exception:
+        preds = rec_pred([img], full_page=True)
+
+    return _pred_to_result(preds[0] if preds else None)
+
+
+def _infer_batch(subimgs: list, rec_pred, layout_pred) -> list:
+    """Esegue l'inferenza full_page su una lista di sotto-immagini in un solo
+    batch (una chiamata layout + una chiamata recognition).
+
+    Restituisce una lista di (text, html, structs) allineata a subimgs.
+    In caso di errore dell'intero batch, ripiega sull'inferenza per singola
+    sotto-immagine (con la propria gestione errori) così un solo elemento
+    problematico non fa fallire tutte le pagine del chunk.
+    """
+    if not subimgs:
+        return []
+    try:
+        layouts = layout_pred(subimgs)
+        preds = rec_pred(subimgs, layouts, full_page=True)
+    except Exception:
+        try:
+            preds = rec_pred(subimgs, full_page=True)
+        except Exception:
+            return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
+    if not preds or len(preds) != len(subimgs):
+        return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
+    return [_pred_to_result(p) for p in preds]
+
+
+def _safe_infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
+    """_infer_subimage che non solleva mai: in caso di errore restituisce vuoto."""
+    try:
+        return _infer_subimage(img, rec_pred, layout_pred)
+    except Exception:
+        return "", "", []
+
+
+def _ocr_batch(pages: list, rec_pred, layout_pred) -> list:
+    """OCR di più pagine in un unico batch.
+
+    pages è una lista di (img, forced_angle). Restituisce una lista di
+    (text, angle, html, structs) nello stesso ordine delle pagine in input.
+
+    Le pagine vengono appiattite in sotto-immagini (split doppia-pagina),
+    processate tutte insieme in un solo forward pass, poi ri-raggruppate.
+    """
+    sub_imgs: list = []
+    page_of: list = []          # per ogni sotto-immagine: indice pagina
+    angles: list = [None] * len(pages)
+    for pi, (img, forced_angle) in enumerate(pages):
+        subs, angle = _split_subimages(img, forced_angle)
+        angles[pi] = angle
+        for sub in subs:
+            sub_imgs.append(sub)
+            page_of.append(pi)
+
+    sub_results = _infer_batch(sub_imgs, rec_pred, layout_pred)
+
+    grouped: list = [[] for _ in pages]
+    for j, res in enumerate(sub_results):
+        grouped[page_of[j]].append(res)
+
+    return [_combine_subresults(grouped[pi], angles[pi]) for pi in range(len(pages))]
+
+
 def _ocr_page(img: Image.Image, rec_pred, layout_pred,
               forced_angle: Optional[int] = None) -> tuple:
     """Restituisce (text, angle_applied, html, structs).
@@ -88,48 +216,9 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred,
     di loop/errore del decoder full-page.
     Gestisce pagine doppie affiancate (landscape) dividendo a metà.
     """
-    # Doppia pagina affiancata (landscape): divide a metà e processa ciascuna metà
-    if forced_angle is None and img.size[0] > img.size[1] * 1.2:
-        mid = img.size[0] // 2
-        l_text, _, l_html, l_structs = _ocr_page(
-            img.crop((0, 0, mid, img.size[1])), rec_pred, layout_pred)
-        r_text, _, r_html, r_structs = _ocr_page(
-            img.crop((mid, 0, img.size[0], img.size[1])), rec_pred, layout_pred)
-        combined_text = "\n\n".join(t for t in (l_text, r_text) if t)
-        combined_html = "\n".join(h for h in (l_html, r_html) if h)
-        return combined_text, None, combined_html, l_structs + r_structs
-
-    angle_applied: Optional[int] = None
-    if forced_angle is not None and forced_angle != 0:
-        img = img.rotate(forced_angle, expand=True)
-        angle_applied = forced_angle
-        if img.size[0] > img.size[1] * 1.2:
-            mid = img.size[0] // 2
-            l_text, _, l_html, l_structs = _ocr_page(
-                img.crop((0, 0, mid, img.size[1])), rec_pred, layout_pred, forced_angle=0)
-            r_text, _, r_html, r_structs = _ocr_page(
-                img.crop((mid, 0, img.size[0], img.size[1])), rec_pred, layout_pred, forced_angle=0)
-            combined_text = "\n\n".join(t for t in (l_text, r_text) if t)
-            combined_html = "\n".join(h for h in (l_html, r_html) if h)
-            return combined_text, angle_applied, combined_html, l_structs + r_structs
-
-    try:
-        layouts = layout_pred([img])
-        # full_page=True: percorso più accurato; layouts funge da fallback automatico
-        preds = rec_pred([img], layouts, full_page=True)
-    except Exception:
-        preds = rec_pred([img], full_page=True)
-
-    if not preds or not preds[0].blocks:
-        return "", angle_applied, "", []
-
-    blocks = preds[0].blocks
-    return (
-        _blocks_to_text(blocks),
-        angle_applied,
-        _blocks_to_html(blocks),
-        _blocks_to_structs(blocks),
-    )
+    subimgs, angle_applied = _split_subimages(img, forced_angle)
+    subresults = [_infer_subimage(sub, rec_pred, layout_pred) for sub in subimgs]
+    return _combine_subresults(subresults, angle_applied)
 
 
 def _warmup(rec_pred, layout_pred) -> None:
@@ -160,7 +249,7 @@ def main():
 
     _warmup(rec_pred, layout_pred)
 
-    print(json.dumps({"type": "ready"}), flush=True)
+    print(json.dumps({"type": "ready", "batch": True}), flush=True)
 
     for line in sys.stdin:
         line = line.strip()
@@ -173,6 +262,28 @@ def main():
 
         if cmd.get("quit"):
             break
+
+        # Comando batch: {"paths": [...], "forced_angle": null | int}
+        paths = cmd.get("paths")
+        if isinstance(paths, list):
+            forced_angle = cmd.get("forced_angle")
+            items = []
+            try:
+                pages = [
+                    (Image.open(p).convert("RGB"), forced_angle) for p in paths
+                ]
+                results = _ocr_batch(pages, rec_pred, layout_pred)
+                for text, angle, html, structs in results:
+                    items.append({
+                        "text": text,
+                        "angle": angle,
+                        "html": html,
+                        "blocks": structs,
+                    })
+                print(json.dumps({"type": "results", "items": items}), flush=True)
+            except Exception as e:
+                print(json.dumps({"type": "error", "message": str(e)}), flush=True)
+            continue
 
         path = cmd.get("path", "")
         forced_angle = cmd.get("forced_angle")
