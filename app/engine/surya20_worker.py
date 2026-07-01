@@ -60,22 +60,32 @@ def _blocks_to_html(blocks) -> str:
             continue
         html = block.html.strip()
         if html:
-            css = block.label.lower().replace(" ", "-").replace("_", "-")
+            # Label camelCase di Surya 2 → classe CSS kebab-case
+            # (es. "SectionHeader" → "section-header").
+            css = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", block.label).lower()
             parts.append(f'<div class="block {css}">{html}</div>')
     return "\n".join(parts)
 
 
 def _blocks_to_structs(blocks) -> list:
-    """Lista di {label, html} per ogni blocco (per export strutturato DOCX)."""
+    """Lista di {label, html} per ogni blocco (per export strutturato DOCX).
+
+    I blocchi immagine (_SKIP_LABELS) sono inclusi come segnaposto con html
+    vuoto: il writer DOCX li rende come marcatore testuale così gli utenti non
+    vedenti si orientano nel layout originale. Il testo plain (_blocks_to_text)
+    continua invece a ignorarli.
+    """
     sorted_blocks = sorted(
         (b for b in blocks if not b.skipped and not b.error),
         key=lambda b: b.reading_order,
     )
-    return [
-        {"label": block.label, "html": block.html.strip()}
-        for block in sorted_blocks
-        if block.label not in _SKIP_LABELS and block.html.strip()
-    ]
+    structs = []
+    for block in sorted_blocks:
+        if block.label in _SKIP_LABELS:
+            structs.append({"label": block.label, "html": ""})
+        elif block.html.strip():
+            structs.append({"label": block.label, "html": block.html.strip()})
+    return structs
 
 
 def _is_landscape(img: Image.Image) -> bool:

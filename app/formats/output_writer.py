@@ -16,6 +16,8 @@ from html.parser import HTMLParser
 
 import docx
 
+from app.i18n import _
+
 # Mappa cifre ASCII → apici Unicode (U+2070 … U+2079)
 _SUPERSCRIPT_MAP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
@@ -24,15 +26,26 @@ _TAG_RE = re.compile(r"(<i>.*?</i>|<sup>\d+</sup>|<math>.*?</math>)", re.DOTALL)
 # Pattern per <sup> eventualmente annidato dentro <i>
 _SUP_RE = re.compile(r"(<sup>\d+</sup>)")
 
-# Stili Word per etichette Surya 0.20
+# Stili Word per etichette Surya 0.20.
+# NB: Surya 2 usa label canoniche in camelCase (SectionHeader, PageHeader…),
+# non i vecchi nomi con trattino. Surya 2 non ha una label "Title": il livello
+# di intestazione più alto è "SectionHeader".
 _BLOCK_STYLE = {
-    "Title": "Heading 1",
-    "Section-header": "Heading 2",
+    "SectionHeader": "Heading 1",
     "Caption": "Caption",
+    "PageHeader": "Header",
+    "PageFooter": "Footer",
 }
 
-# Etichette da saltare nel DOCX (intestazioni/piè pagina scansionati)
-_SKIP_DOCX_LABELS = frozenset({"Picture", "Figure", "Page-header", "Page-footer"})
+# Blocchi puramente visivi: nel DOCX diventano un segnaposto testuale, così gli
+# utenti non vedenti sanno dove si trovavano le immagini nel layout originale.
+_IMAGE_PLACEHOLDER = {
+    "Picture": "[Image]",
+    "Figure": "[Figure]",
+}
+
+# Etichette da saltare nel DOCX: solo le pagine vuote (nessun contenuto utile).
+_SKIP_DOCX_LABELS = frozenset({"BlankPage"})
 
 
 def strip_markup(text: str) -> str:
@@ -132,7 +145,7 @@ def _html_to_markup(html: str) -> str:
     # Preserva <i>, </i>, <sup>N</sup> tramite placeholder prima di strippare
     html = html.replace('<i>', '\x00ITAG\x00')
     html = html.replace('</i>', '\x00EITAG\x00')
-    html = re.sub(r'<sup>(\d+)</sup>', r'\x00SUP\1\x00', html)
+    html = re.sub(r'<sup>(\d+)</sup>', '\x00SUP\\1\x00', html)
     html = re.sub(r'<[^>]+>', '', html)
     html = html.replace('\x00ITAG\x00', '<i>')
     html = html.replace('\x00EITAG\x00', '</i>')
@@ -193,7 +206,18 @@ def _add_block_to_docx(doc, block: dict) -> None:
     """Aggiunge un blocco Surya 0.20 al documento Word."""
     label = block.get("label", "Text")
     html = block.get("html", "")
-    if not html or label in _SKIP_DOCX_LABELS:
+
+    if label in _SKIP_DOCX_LABELS:
+        return
+
+    if label in _IMAGE_PLACEHOLDER:
+        # Blocco immagine: nessun testo, ma resta in reading order come
+        # marcatore così l'utente si orienta nel layout originale.
+        doc.add_paragraph(style="Caption").add_run(
+            _(_IMAGE_PLACEHOLDER[label])).italic = True
+        return
+
+    if not html:
         return
 
     if label == "Table":
@@ -204,9 +228,15 @@ def _add_block_to_docx(doc, block: dict) -> None:
     if not markup:
         return
 
-    if label == "List-item":
-        para = doc.add_paragraph(style="List Bullet")
-    elif label == "Footnote":
+    if label == "ListGroup":
+        # Un blocco lista contiene più voci separate da newline (dai <li>).
+        for line in markup.split("\n"):
+            item = line.lstrip("• ").strip()
+            if item:
+                _add_markup_runs(doc.add_paragraph(style="List Bullet"), item)
+        return
+
+    if label == "Footnote":
         para = doc.add_paragraph(style="Normal")
         para.add_run("— ").italic = True
     else:
@@ -269,7 +299,7 @@ def write_html(html: str, path: str) -> None:
         '  .footnote { font-size: 0.85em; border-top: 1px solid #ccc;'
         ' margin-top: 1.5em; padding-top: 0.5em; color: #444; }\n'
         '  .page-header, .page-footer { font-size: 0.8em; color: #888; }\n'
-        '  .formula { font-style: italic; }\n'
+        '  .equation { font-style: italic; }\n'
         '  table { border-collapse: collapse; width: 100%; margin: 1em 0; }\n'
         '  td, th { border: 1px solid #bbb; padding: 4px 8px; }\n'
         '  th { background: #f0f0f0; font-weight: bold; }\n'
