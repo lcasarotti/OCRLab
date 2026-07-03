@@ -12,6 +12,7 @@ Per .html (Surya 0.20): HTML completo con CSS pronto per la visualizzazione.
 
 import os
 import re
+import sys
 from html.parser import HTMLParser
 
 import docx
@@ -312,97 +313,204 @@ def write_html(html: str, path: str) -> None:
         f.write(content)
 
 
-def _utf16be_hex(text: str) -> str:
-    """Codifica `text` come stringa PDF UTF-16BE con BOM (usata per /ActualText)."""
-    return (b"\xfe\xff" + text.encode("utf-16-be")).hex().upper()
+# Font per il testo OCR invisibile. Serve copertura Unicode piena: i base-14 di
+# PyMuPDF ("helv"…) usano codifica Latin-1 e trasformano €, trattini tipografici,
+# virgolette curve e ellissi in '?'. Un TrueType di sistema li mappa (con ToUnicode)
+# → il testo estratto/letto dagli screen reader resta fedele.
+#
+# Il testo OCR viene disegnato con TextWriter (vedi _write_text_layer), NON con
+# insert_textbox: quest'ultimo passa per lo shaping OpenType, che altera il testo
+# *estratto* (parentesi → ﴾ ﴿ con segoeui, glifi mancanti → null, ecc.). TextWriter
+# invece costruisce il ToUnicode dalla stringa di input, quindi il testo estratto
+# resta fedele a prescindere dai glifi (che qui sono invisibili). Verificato con
+# PyMuPDF 1.27 estraendo dal PDF prodotto: greco politonico compreso.
+#
+# Il font conta ancora per un dettaglio: lo spazio. Con arial/tahoma/calibri/times/
+# verdana/cambria/palatino lo spazio U+0020 viene estratto come nbsp U+00A0
+# (rompe la ricerca Ctrl+F di frasi); seguisym.ttf (Segoe UI Symbol) lo preserva
+# e ha copertura larghissima → scelta migliore su Windows.
+_OCR_FONT_CANDIDATES = {
+    "win32": [
+        r"C:\Windows\Fonts\seguisym.ttf",  # spazi + parentesi puliti, copertura larga
+        r"C:\Windows\Fonts\arial.ttf",     # fallback: nbsp al posto dello spazio
+        r"C:\Windows\Fonts\tahoma.ttf",
+    ],
+    "darwin": [
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ],
+}
+
+_ocr_font_cache = None
 
 
-def _add_tagged_structure(doc: "fitz.Document", page_data: list) -> None:
-    """Aggiunge MarkInfo e structure tree al PDF per accessibilità tagged PDF.
+def _resolve_ocr_font() -> tuple[str, str | None]:
+    """Ritorna (fontname, fontfile) per il testo OCR invisibile.
 
-    page_data: lista di (page_xref: int, has_text: bool, text: str).
-    Ogni pagina con testo ha già MCID 0 nel content stream (elemento /P).
-    Le immagini sono già marcate /Artifact (nessun MCID, nessun StructElem).
-
-    Ogni elemento /P riceve /ActualText con il testo OCR UTF-16BE: Acrobat
-    e gli screen reader leggono il testo direttamente dalla struttura, senza
-    dover estrarre i glyph dal content stream (che usa render_mode=3).
+    Preferisce un TrueType di sistema a copertura Unicode piena; fallback su
+    'helv' (base-14, solo Latin-1) se nessun candidato esiste sul sistema.
+    Il risultato è memorizzato in cache: la risoluzione avviene una sola volta.
     """
-    pages_with_text = [
-        (px, i, txt)
-        for i, (px, ht, txt) in enumerate(page_data)
-        if ht
-    ]
-    if not pages_with_text:
+    global _ocr_font_cache
+    if _ocr_font_cache is not None:
+        return _ocr_font_cache
+    for path in _OCR_FONT_CANDIDATES.get(sys.platform, []):
+        if os.path.exists(path):
+            _ocr_font_cache = ("ocrfont", path)
+            return _ocr_font_cache
+    _ocr_font_cache = ("helv", None)
+    return _ocr_font_cache
+
+
+def _write_text_layer(fitz, page, rect, text: str, font) -> bool:
+    """Disegna il testo OCR invisibile (render_mode=3) con TextWriter.
+
+    TextWriter (invece di insert_textbox) preserva il testo estratto per qualsiasi
+    carattere, ma non fa né word-wrap né auto-shrink: li implementiamo qui.
+    Va a capo sulle parole per stare nella larghezza e sceglie la fontsize più
+    grande (≤6pt) con cui tutte le righe entrano in altezza, così su pagine dense
+    non si perde testo (parità con il vecchio _fit_fontsize). Ritorna True se ha
+    effettivamente scritto del testo.
+    """
+    margin  = 10
+    max_w   = rect.width  - 2 * margin
+    avail_h = rect.height - 2 * margin
+    paragraphs = text.split("\n")
+
+    def wrap(fs):
+        lines = []
+        for para in paragraphs:
+            para = para.rstrip()
+            if not para:
+                lines.append("")          # preserva lo stacco fra paragrafi
+                continue
+            cur = ""
+            for word in para.split(" "):
+                trial = word if not cur else cur + " " + word
+                if not cur or font.text_length(trial, fontsize=fs) <= max_w:
+                    cur = trial
+                else:
+                    lines.append(cur)
+                    cur = word
+            lines.append(cur)
+        return lines
+
+    fs, lines = 2, wrap(2)
+    for cand in (6, 5, 4, 3, 2):
+        wl = wrap(cand)
+        if len(wl) * (cand * 1.2) <= avail_h:
+            fs, lines = cand, wl
+            break
+
+    if not any(ln.strip() for ln in lines):
+        return False
+
+    line_h = fs * 1.2
+    tw = fitz.TextWriter(rect)
+    x = rect.x0 + margin
+    y = rect.y0 + margin + fs
+    wrote = False
+    for ln in lines:
+        if ln:
+            tw.append((x, y), ln, font=font, fontsize=fs)
+            wrote = True
+        y += line_h
+    if wrote:
+        tw.write_text(page, render_mode=3)
+    return wrote
+
+
+def _wrap_marked_content(doc, xref: int, prefix: bytes) -> None:
+    """Avvolge il content stream `xref` in una sequenza di marked content.
+
+    Antepone `prefix` (es. b"/Artifact BMC" o b"/P <</MCID 0>> BDC") e accoda
+    `EMC`, così il disegno esistente (immagine o testo) diventa un blocco
+    marcato riconoscibile dallo structure tree / dalle tecnologie assistive.
+    """
+    body = doc.xref_stream(xref)
+    doc.update_stream(xref, prefix + b"\n" + body + b"\nEMC\n")
+
+
+def _add_tag_structure(doc, page_tags: list) -> None:
+    """Costruisce lo structure tree (tagged PDF) del documento.
+
+    page_tags: lista di (page_xref, has_text) — un elemento per pagina, in ordine.
+    Ogni pagina con testo ha nel suo content stream un blocco marcato
+    `/P <</MCID 0>> BDC … EMC` (l'immagine è marcata `/Artifact`, quindi fuori
+    dall'albero). Per ognuna creiamo un StructElem /P che punta a quel MCID.
+
+    Replica lo schema dei PDF taggati da Word: StructTreeRoot → /Document →
+    [ /P, /P, … ], con ParentTree e /StructParents per pagina. È questo che
+    permette a NVDA/Acrobat di leggere il testo una sola volta e nell'ordine
+    corretto, senza esporre l'immagine come "grafico".
+    """
+    with_text = [(px, i) for i, (px, ht) in enumerate(page_tags) if ht]
+    if not with_text:
         return
 
-    catalog_xref     = doc.pdf_catalog()
-    struct_root_xref = doc.get_new_xref()
-    doc_elem_xref    = doc.get_new_xref()
-    parent_tree_xref = doc.get_new_xref()
+    catalog_xref = doc.pdf_catalog()
+    root_xref    = doc.get_new_xref()   # StructTreeRoot
+    doc_xref     = doc.get_new_xref()   # elemento /Document
 
-    # Un elemento /P per ogni pagina con testo, con /ActualText
-    p_xrefs = []
-    for page_xref, sp_idx, txt in pages_with_text:
-        px              = doc.get_new_xref()
-        actual_text_hex = _utf16be_hex(txt)
-        doc.update_object(px, (
+    p_xrefs   = []   # StructElem /P, uno per pagina con testo
+    num_parts = []   # voci del ParentTree: structParentIndex → [ /P ]
+    for struct_parent, (page_xref, _page_idx) in enumerate(with_text):
+        p_xref = doc.get_new_xref()
+        doc.update_object(p_xref, (
             f"<< /Type /StructElem /S /P "
-            f"/P {doc_elem_xref} 0 R "
-            f"/Pg {page_xref} 0 R "
-            f"/K 0 "
-            f"/ActualText <{actual_text_hex}> >>"
+            f"/P {doc_xref} 0 R /Pg {page_xref} 0 R /K [0] >>"
         ))
-        p_xrefs.append((page_xref, sp_idx, px))
+        p_xrefs.append(p_xref)
 
-    # Elemento /Document: radice logica del documento
-    kids_str = " ".join(f"{px} 0 R" for _, _, px in p_xrefs)
-    doc.update_object(doc_elem_xref, (
+        # Ogni pagina ha un solo MCID (0): la voce del ParentTree è un array
+        # con un elemento indicizzato per MCID.
+        arr_xref = doc.get_new_xref()
+        doc.update_object(arr_xref, f"[ {p_xref} 0 R ]")
+        num_parts.append(f"{struct_parent} {arr_xref} 0 R")
+
+        doc.xref_set_key(page_xref, "StructParents", str(struct_parent))
+        doc.xref_set_key(page_xref, "Tabs", "/S")
+
+    kids = " ".join(f"{px} 0 R" for px in p_xrefs)
+    doc.update_object(doc_xref, (
         f"<< /Type /StructElem /S /Document "
-        f"/P {struct_root_xref} 0 R "
-        f"/Kids [{kids_str}] >>"
+        f"/P {root_xref} 0 R /K [ {kids} ] >>"
     ))
 
-    # ParentTree: mappa StructParents-index → [StructElem per MCID 0]
-    nums_parts = []
-    for page_xref, sp_idx, px in p_xrefs:
-        nums_parts.append(f"{sp_idx} [{px} 0 R]")
-        doc.xref_set_key(page_xref, "StructParents", str(sp_idx))
-        doc.xref_set_key(page_xref, "Tabs", "/S")   # lettura in ordine strutturale
+    parent_tree_xref = doc.get_new_xref()
     doc.update_object(parent_tree_xref,
-                      f"<< /Nums [{' '.join(nums_parts)}] >>")
+                      f"<< /Nums [ {' '.join(num_parts)} ] >>")
 
-    # StructTreeRoot
-    doc.update_object(struct_root_xref, (
-        f"<< /Type /StructTreeRoot "
-        f"/K [{doc_elem_xref} 0 R] "
-        f"/ParentTree {parent_tree_xref} 0 R >>"
+    doc.update_object(root_xref, (
+        f"<< /Type /StructTreeRoot /K [ {doc_xref} 0 R ] "
+        f"/ParentTree {parent_tree_xref} 0 R /ParentTreeNextKey {len(with_text)} >>"
     ))
 
-    # Aggiorna il catalogo
+    doc.xref_set_key(catalog_xref, "StructTreeRoot", f"{root_xref} 0 R")
     doc.xref_set_key(catalog_xref, "MarkInfo", "<< /Marked true >>")
-    doc.xref_set_key(catalog_xref, "StructTreeRoot",
-                     f"{struct_root_xref} 0 R")
-    doc.xref_set_key(catalog_xref, "Lang", "(it-IT)")
 
 
 def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None:
-    """PDF ricercabile tagged: immagine /Artifact + testo OCR invisibile in elementi /P.
+    """PDF ricercabile e **taggato**: immagine di sfondo + testo OCR leggibile.
 
-    Struttura di ogni pagina (ordine nel content stream):
-    1. Immagine rasterizzata sorgente: disegnata per prima (sfondo visivo),
-       poi marcata /Artifact → gli screen reader la ignorano.
-    2. Testo OCR invisibile (render_mode=3): disegnato sopra l'immagine,
-       in blocco /P <</MCID 0>> BDC…EMC → referenziato dalla structure tree.
+    Struttura di ogni pagina:
+    1. Immagine rasterizzata sorgente, marcata `/Artifact`: è puro sfondo
+       visivo e le tecnologie assistive la ignorano (niente "grafico" letto).
+    2. Testo OCR invisibile (render_mode=3), avvolto in un blocco marcato
+       `/P <</MCID 0>> BDC … EMC`, con un font a copertura Unicode piena
+       (vedi _resolve_ocr_font).
 
-    L'approccio render_mode=3 + immagine-come-sfondo è lo standard dei PDF
-    ricercabili prodotti da strumenti OCR (ocrmypdf, ABBYY, …).  Acrobat e gli
-    screen reader leggono il testo dallo strato invisibile tramite il ToUnicode
-    CMap e/o l'ActualText nella structure tree.
+    Sopra le pagine viene costruito uno structure tree completo (vedi
+    _add_tag_structure): StructTreeRoot + MarkInfo/Marked. È lo stesso schema
+    dei PDF taggati da Word — l'unico che NVDA/Acrobat leggono in modo pulito
+    (testo una sola volta, nell'ordine giusto, senza doppioni).
 
-    Nota implementativa: TextWriter aggiunge content stream in modo "lazy"
-    (non accessibili via xref_stream() finché il doc non viene serializzato).
-    Perciò si fa un tobytes() intermedio prima di applicare i marker BDC/EMC.
+    Il tentativo precedente di taggare falliva perché lo StructElem puntava a
+    un MCID che non esisteva nel content stream (insert_textbox non emette
+    marked content): qui il BDC/EMC viene scritto esplicitamente, così il tag
+    e il glyph combaciano.
 
     Args:
         source_path: percorso del file sorgente (PDF o immagine).
@@ -426,84 +534,39 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None
         src = fitz.open("pdf", pdf_bytes)
 
     out_doc = fitz.open()
-    text_pages: set[int] = set()   # indici pagina con testo
-    page_texts: list[str] = []     # testo per pagina (per ActualText corretto in Fase 4)
+    fontname, fontfile = _resolve_ocr_font()
+    ocr_font = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font(fontname=fontname)
+    page_tags = []   # (page_xref, has_text) per _add_tag_structure
 
     try:
-        # ── Fase 1: costruisce le pagine (immagine prima, testo invisibile sopra) ─
-        # Ordine fondamentale: prima l'immagine (sfondo visivo), poi il testo OCR
-        # con render_mode=3 (invisibile, font Type1/WinAnsiEncoding).
-        # WinAnsiEncoding è il formato più compatibile con AT/screen reader:
-        # ogni byte del content stream mappa direttamente a un carattere Unicode
-        # senza bisogno di CMap aggiuntive (a differenza di CIDFont/Identity-H).
         for i in range(len(src)):
             src_page = src[i]
             rect     = src_page.rect
 
             out_page = out_doc.new_page(width=rect.width, height=rect.height)
 
-            # 1. Immagine sorgente: disegnata per prima → sarà marcata /Artifact
+            # 1. Immagine sorgente come sfondo visivo, marcata /Artifact.
             pix = src_page.get_pixmap(dpi=200)
             out_page.insert_image(rect, pixmap=pix)
+            img_xref = out_page.get_contents()[-1]
+            _wrap_marked_content(doc=out_doc, xref=img_xref, prefix=b"/Artifact BMC")
 
-            # 2. Testo OCR invisibile (render_mode=3) sopra l'immagine
+            # 2. Testo OCR invisibile (render_mode=3), marcato /P con MCID 0.
             text = pages_text[i] if i < len(pages_text) else ""
-            page_texts.append(text)
+            has_text = False
             if text:
-                # Fontsize piccolo (6pt) per far stare più testo nella pagina;
-                # l'invisibilità lo rende irrilevante visivamente.
-                text_rect = fitz.Rect(
-                    rect.x0 + 10, rect.y0 + 10,
-                    rect.x1 - 10, rect.y1 - 10,
-                )
-                out_page.insert_textbox(
-                    text_rect, text,
-                    fontname="helv", fontsize=6,
-                    render_mode=3,
-                )
-                text_pages.add(i)
+                has_text = _write_text_layer(fitz, out_page, rect, text, ocr_font)
+                if has_text:
+                    text_xref = out_page.get_contents()[-1]
+                    _wrap_marked_content(doc=out_doc, xref=text_xref,
+                                         prefix=b"/P <</MCID 0>> BDC")
 
-        # ── Fase 2: serializza in buffer per rendere leggibili gli xref ───────
-        buf = out_doc.tobytes()
-    finally:
-        src.close()
-        out_doc.close()
+            page_tags.append((out_page.xref, has_text))
 
-    # ── Fase 3: riapre dal buffer e applica i marker BDC/EMC ─────────────────
-    out_doc = fitz.open("pdf", buf)
-    try:
-        page_data = []
-        for i in range(len(out_doc)):
-            out_page = out_doc[i]
-            has_text = (i in text_pages)
-            # Usa il testo della pagina corrente (non la variabile dell'ultimo ciclo)
-            page_text = page_texts[i] if i < len(page_texts) else ""
-
-            for xref in out_page.get_contents():
-                raw = out_doc.xref_stream(xref)
-                if not raw:
-                    continue
-                cs = raw.decode("latin-1", errors="replace")
-                if "BT" in cs:
-                    # Stream di testo → elemento /P con MCID 0
-                    out_doc.update_stream(
-                        xref,
-                        ("/P <</MCID 0>> BDC\n" + cs + "\nEMC\n").encode("latin-1"),
-                    )
-                else:
-                    # Stream immagine → /Artifact (ignorato dagli screen reader)
-                    out_doc.update_stream(
-                        xref,
-                        ("/Artifact BMC\n" + cs + "\nEMC\n").encode("latin-1"),
-                    )
-
-            page_data.append((out_page.xref, has_text, page_text if has_text else ""))
-
-        # ── Fase 4: aggiunge structure tree per tagged PDF ────────────────────
-        _add_tagged_structure(out_doc, page_data)
-
+        _add_tag_structure(out_doc, page_tags)
         out_doc.save(out_path, garbage=4, deflate=True)
     finally:
+        src.close()
         out_doc.close()
 
 
