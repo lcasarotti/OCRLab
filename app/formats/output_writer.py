@@ -13,6 +13,7 @@ Per .html (Surya 0.20): HTML completo con CSS pronto per la visualizzazione.
 import os
 import re
 import sys
+from html import unescape
 from html.parser import HTMLParser
 
 import docx
@@ -422,6 +423,85 @@ def _write_text_layer(fitz, page, rect, text: str, font) -> bool:
     return wrote
 
 
+def _block_plain_text(html: str) -> str:
+    """Testo piano di un blocco Surya: rimuove i tag, decodifica le entità e
+    normalizza gli spazi (per il layer OCR invisibile posizionato)."""
+    text = re.sub(r"<br\s*/?>", " ", html, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _wrap_words(font, words: list, fs: float, max_w: float) -> list:
+    """Word-wrap di una lista di parole alla larghezza max_w per fontsize fs."""
+    lines, cur = [], ""
+    for word in words:
+        trial = word if not cur else cur + " " + word
+        if not cur or font.text_length(trial, fontsize=fs) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _write_positioned_text_layer(fitz, page, rect, page_blocks, font) -> bool:
+    """Disegna il testo OCR invisibile posizionato sulle bbox dei blocchi Surya.
+
+    Ogni blocco con bbox (normalizzata in [0,1], vedi surya20_worker) viene
+    riportato nel rettangolo corrispondente della pagina, scegliendo la
+    fontsize più grande con cui il testo (word-wrappato alla larghezza del
+    blocco) sta nell'altezza del blocco. Così il layer invisibile combacia
+    con la posizione del testo nell'immagine: selezione ed evidenziazione
+    cadono al posto giusto e la lettura spaziale è coerente.
+
+    Tutti i blocchi vengono disegnati con un unico TextWriter → un solo content
+    stream, come per _write_text_layer: la struttura del tag tree (un /P con
+    MCID 0 per pagina, nell'ordine di lettura) resta invariata. Ritorna True se
+    ha scritto del testo.
+    """
+    W, H = rect.width, rect.height
+    tw = fitz.TextWriter(rect)
+    wrote = False
+    for blk in page_blocks:
+        bbox = blk.get("bbox")
+        if not bbox:
+            continue
+        text = _block_plain_text(blk.get("html", ""))
+        if not text:
+            continue
+        x1, y1, x2, y2 = bbox
+        box_x0 = rect.x0 + x1 * W
+        box_y0 = rect.y0 + y1 * H
+        box_w = max(1.0, (x2 - x1) * W)
+        box_h = max(1.0, (y2 - y1) * H)
+
+        words = text.split(" ")
+        size = min(box_h, 60.0)
+        lines = _wrap_words(font, words, size, box_w)
+        while size > 1.0 and len(lines) * size * 1.2 > box_h:
+            size -= 0.5
+            lines = _wrap_words(font, words, size, box_w)
+
+        line_h = size * 1.2
+        y = box_y0 + size
+        for ln in lines:
+            if ln:
+                # Spazio finale reale: i lettori che leggono il testo taggato
+                # (NVDA, "copia" da PDF taggato) concatenano i glifi nell'ordine
+                # del content stream, ignorando la geometria. Senza separatore i
+                # run adiacenti si fondono ("RECENSIONICRITICHE", "delladesuetudine");
+                # lo spazio a fine riga/blocco mantiene il testo leggibile.
+                tw.append((box_x0, y), ln + " ", font=font, fontsize=size)
+                wrote = True
+            y += line_h
+    if wrote:
+        tw.write_text(page, render_mode=3)
+    return wrote
+
+
 def _wrap_marked_content(doc, xref: int, prefix: bytes) -> None:
     """Avvolge il content stream `xref` in una sequenza di marked content.
 
@@ -492,7 +572,8 @@ def _add_tag_structure(doc, page_tags: list) -> None:
     doc.xref_set_key(catalog_xref, "MarkInfo", "<< /Marked true >>")
 
 
-def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None:
+def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str,
+                         blocks=None) -> None:
     """PDF ricercabile e **taggato**: immagine di sfondo + testo OCR leggibile.
 
     Struttura di ogni pagina:
@@ -512,10 +593,18 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None
     marked content): qui il BDC/EMC viene scritto esplicitamente, così il tag
     e il glyph combaciano.
 
+    Se `blocks` è fornito (list[list[dict]] da Surya 0.20, con bbox normalizzate),
+    il testo di ogni pagina viene posizionato sopra la regione corrispondente
+    dell'immagine (vedi _write_positioned_text_layer): selezione/evidenziazione e
+    lettura spaziale combaciano col layout. Senza bbox si ripiega sul layer a
+    flusso (_write_text_layer). In entrambi i casi la struttura del tag tree è la
+    stessa (un /P per pagina), quindi la lettura NVDA non cambia.
+
     Args:
         source_path: percorso del file sorgente (PDF o immagine).
         ocr_text:    testo OCR con pagine separate da \\f.
         out_path:    percorso del file PDF di output.
+        blocks:      opzionale, list[list[dict]] per pagina con bbox dei blocchi.
     """
     try:
         import pymupdf as fitz
@@ -552,14 +641,23 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str) -> None
             _wrap_marked_content(doc=out_doc, xref=img_xref, prefix=b"/Artifact BMC")
 
             # 2. Testo OCR invisibile (render_mode=3), marcato /P con MCID 0.
+            #    Se la pagina ha blocchi con bbox li posizioniamo sull'immagine,
+            #    altrimenti ripieghiamo sul layer a flusso.
             text = pages_text[i] if i < len(pages_text) else ""
+            page_blocks = blocks[i] if blocks and i < len(blocks) else None
+            has_boxes = bool(page_blocks) and any(b.get("bbox") for b in page_blocks)
             has_text = False
-            if text:
+            if has_boxes:
+                has_text = _write_positioned_text_layer(
+                    fitz, out_page, rect, page_blocks, ocr_font)
+                if not has_text and text:
+                    has_text = _write_text_layer(fitz, out_page, rect, text, ocr_font)
+            elif text:
                 has_text = _write_text_layer(fitz, out_page, rect, text, ocr_font)
-                if has_text:
-                    text_xref = out_page.get_contents()[-1]
-                    _wrap_marked_content(doc=out_doc, xref=text_xref,
-                                         prefix=b"/P <</MCID 0>> BDC")
+            if has_text:
+                text_xref = out_page.get_contents()[-1]
+                _wrap_marked_content(doc=out_doc, xref=text_xref,
+                                     prefix=b"/P <</MCID 0>> BDC")
 
             page_tags.append((out_page.xref, has_text))
 
@@ -574,7 +672,8 @@ def write_file(text: str, path: str, source_path: str = "",
                blocks=None, html: str = "") -> None:
     """Salva il testo in base all'estensione del file.
 
-    blocks: list[list[dict]] da Surya 0.20 (passato a write_docx per layout strutturato).
+    blocks: list[list[dict]] da Surya 0.20 (layout strutturato per il DOCX e
+            posizionamento del testo sul PDF ricercabile).
     html:   HTML grezzo da Surya 0.20 (necessario per l'esportazione .html).
     """
     ext = os.path.splitext(path)[1].lower()
@@ -587,7 +686,7 @@ def write_file(text: str, path: str, source_path: str = "",
             raise ValueError(
                 "Per il PDF ricercabile è necessario il percorso del file sorgente."
             )
-        write_searchable_pdf(source_path, text, path)
+        write_searchable_pdf(source_path, text, path, blocks=blocks)
     elif ext == ".html":
         if not html:
             raise ValueError(

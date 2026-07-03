@@ -67,13 +67,35 @@ def _blocks_to_html(blocks) -> str:
     return "\n".join(parts)
 
 
-def _blocks_to_structs(blocks) -> list:
-    """Lista di {label, html} per ogni blocco (per export strutturato DOCX).
+def _norm_bbox(block, img_size) -> Optional[list]:
+    """Bbox del blocco normalizzata in [0,1] rispetto a img_size (w, h).
+
+    Restituisce [x1, y1, x2, y2] frazionari, o None se bbox/dimensioni non
+    disponibili. Normalizzando qui (nello spazio pixel dell'immagine data a
+    Surya) il writer del PDF può riposizionare il testo su qualsiasi pagina
+    senza conoscere il DPI di rasterizzazione.
+    """
+    bbox = getattr(block, "bbox", None)
+    if not bbox or not img_size:
+        return None
+    w, h = img_size
+    if not w or not h:
+        return None
+    x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+    return [x1 / w, y1 / h, x2 / w, y2 / h]
+
+
+def _blocks_to_structs(blocks, img_size=None) -> list:
+    """Lista di {label, html, bbox} per ogni blocco (export DOCX e PDF).
 
     I blocchi immagine (_SKIP_LABELS) sono inclusi come segnaposto con html
     vuoto: il writer DOCX li rende come marcatore testuale così gli utenti non
     vedenti si orientano nel layout originale. Il testo plain (_blocks_to_text)
     continua invece a ignorarli.
+
+    `bbox` (normalizzata in [0,1], vedi _norm_bbox) serve al PDF ricercabile per
+    posizionare il testo OCR invisibile sopra la regione corrispondente
+    dell'immagine; è None se le coordinate non sono disponibili.
     """
     sorted_blocks = sorted(
         (b for b in blocks if not b.skipped and not b.error),
@@ -81,10 +103,12 @@ def _blocks_to_structs(blocks) -> list:
     )
     structs = []
     for block in sorted_blocks:
+        bbox = _norm_bbox(block, img_size)
         if block.label in _SKIP_LABELS:
-            structs.append({"label": block.label, "html": ""})
+            structs.append({"label": block.label, "html": "", "bbox": bbox})
         elif block.html.strip():
-            structs.append({"label": block.label, "html": block.html.strip()})
+            structs.append({"label": block.label, "html": block.html.strip(),
+                            "bbox": bbox})
     return structs
 
 
@@ -130,15 +154,27 @@ def _combine_subresults(subresults: list, angle_applied: Optional[int]) -> tuple
     structs = []
     for _, _, s in subresults:
         structs.extend(s)
+    # Pagina divisa (doppia pagina landscape): le bbox sono normalizzate sulle
+    # sotto-immagini sinistra/destra, non sulla pagina intera, quindi non sono
+    # utilizzabili per posizionare il testo. Le azzeriamo → il PDF ricercabile
+    # ripiega sul layout a flusso per queste pagine.
+    if len(subresults) > 1:
+        for st in structs:
+            st["bbox"] = None
     return "\n\n".join(texts), angle_applied, "\n".join(htmls), structs
 
 
-def _pred_to_result(pred) -> tuple:
-    """Estrae (text, html, structs) da una predizione full_page (o pred vuota)."""
+def _pred_to_result(pred, img_size=None) -> tuple:
+    """Estrae (text, html, structs) da una predizione full_page (o pred vuota).
+
+    img_size (w, h) è la dimensione in pixel dell'immagine passata a Surya:
+    serve a normalizzare le bbox dei blocchi (vedi _blocks_to_structs).
+    """
     if pred is None or not getattr(pred, "blocks", None):
         return "", "", []
     blocks = pred.blocks
-    return _blocks_to_text(blocks), _blocks_to_html(blocks), _blocks_to_structs(blocks)
+    return (_blocks_to_text(blocks), _blocks_to_html(blocks),
+            _blocks_to_structs(blocks, img_size))
 
 
 def _infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
@@ -153,7 +189,7 @@ def _infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
     except Exception:
         preds = rec_pred([img], full_page=True)
 
-    return _pred_to_result(preds[0] if preds else None)
+    return _pred_to_result(preds[0] if preds else None, img.size)
 
 
 def _infer_batch(subimgs: list, rec_pred, layout_pred) -> list:
@@ -177,7 +213,7 @@ def _infer_batch(subimgs: list, rec_pred, layout_pred) -> list:
             return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
     if not preds or len(preds) != len(subimgs):
         return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
-    return [_pred_to_result(p) for p in preds]
+    return [_pred_to_result(p, s.size) for p, s in zip(preds, subimgs)]
 
 
 def _safe_infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
