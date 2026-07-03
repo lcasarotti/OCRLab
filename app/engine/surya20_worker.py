@@ -144,15 +144,17 @@ def _split_subimages(img: Image.Image, forced_angle: Optional[int] = None) -> tu
 
 
 def _combine_subresults(subresults: list, angle_applied: Optional[int]) -> tuple:
-    """Combina i risultati (text, html, structs) di 1 o 2 sotto-immagini.
+    """Combina i risultati (text, html, structs, suspect) di 1 o 2 sotto-immagini.
 
-    subresults è una lista di tuple (text, html, structs) nell'ordine
-    sinistra→destra. Restituisce (text, angle, html, structs) per la pagina.
+    subresults è una lista di tuple (text, html, structs, suspect) nell'ordine
+    sinistra→destra. Restituisce (text, angle, html, structs, suspect) per la
+    pagina; suspect è True solo se la pagina risulta interamente vuota ma almeno
+    una sotto-immagine aveva layout di testo (degrado GPU).
     """
-    texts = [t for t, _, _ in subresults if t]
-    htmls = [h for _, h, _ in subresults if h]
+    texts = [t for t, _, _, _ in subresults if t]
+    htmls = [h for _, h, _, _ in subresults if h]
     structs = []
-    for _, _, s in subresults:
+    for _, _, s, _ in subresults:
         structs.extend(s)
     # Pagina divisa (doppia pagina landscape): le bbox sono normalizzate sulle
     # sotto-immagini sinistra/destra, non sulla pagina intera, quindi non sono
@@ -161,7 +163,9 @@ def _combine_subresults(subresults: list, angle_applied: Optional[int]) -> tuple
     if len(subresults) > 1:
         for st in structs:
             st["bbox"] = None
-    return "\n\n".join(texts), angle_applied, "\n".join(htmls), structs
+    combined_text = "\n\n".join(texts)
+    suspect = (not combined_text.strip()) and any(s for _, _, _, s in subresults)
+    return combined_text, angle_applied, "\n".join(htmls), structs, suspect
 
 
 def _pred_to_result(pred, img_size=None) -> tuple:
@@ -177,11 +181,35 @@ def _pred_to_result(pred, img_size=None) -> tuple:
             _blocks_to_structs(blocks, img_size))
 
 
+def _layout_has_text(layout_result) -> bool:
+    """True se il layout ha rilevato almeno una regione portatrice di testo.
+
+    Ignora le regioni immagine (_SKIP_LABELS): una pagina di sole illustrazioni
+    non è "portatrice di testo". Serve a distinguere una pagina degradata dalla
+    GPU (layout con testo ma riconoscimento vuoto) da una pagina legittimamente
+    senza testo (bianca o solo tavole).
+    """
+    bboxes = getattr(layout_result, "bboxes", None) or []
+    for b in bboxes:
+        if getattr(b, "label", "") not in _SKIP_LABELS:
+            return True
+    return False
+
+
+def _suspect_empty(text: str, layout_result) -> bool:
+    """True se il testo è vuoto ma il layout aveva regioni di testo (degrado GPU)."""
+    return (not text.strip()) and layout_result is not None \
+        and _layout_has_text(layout_result)
+
+
 def _infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
     """Esegue l'inferenza full_page su una singola sotto-immagine.
 
-    Restituisce (text, html, structs).
+    Restituisce (text, html, structs, suspect). `suspect` è True se il
+    riconoscimento è vuoto benché il layout abbia rilevato testo: sintomo di
+    degrado/throttling della GPU (non di pagina realmente bianca).
     """
+    layouts = None
     try:
         layouts = layout_pred([img])
         # full_page=True: percorso più accurato; layouts funge da fallback automatico
@@ -189,46 +217,75 @@ def _infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
     except Exception:
         preds = rec_pred([img], full_page=True)
 
-    return _pred_to_result(preds[0] if preds else None, img.size)
+    text, html, structs = _pred_to_result(preds[0] if preds else None, img.size)
+    layout0 = layouts[0] if layouts else None
+    return text, html, structs, _suspect_empty(text, layout0)
 
 
 def _infer_batch(subimgs: list, rec_pred, layout_pred) -> list:
     """Esegue l'inferenza full_page su una lista di sotto-immagini in un solo
     batch (una chiamata layout + una chiamata recognition).
 
-    Restituisce una lista di (text, html, structs) allineata a subimgs.
-    In caso di errore dell'intero batch, ripiega sull'inferenza per singola
-    sotto-immagine (con la propria gestione errori) così un solo elemento
-    problematico non fa fallire tutte le pagine del chunk.
+    Restituisce una lista di (text, html, structs, suspect) allineata a subimgs
+    (suspect: vedi _infer_subimage). In caso di errore dell'intero batch,
+    ripiega sull'inferenza per singola sotto-immagine così un solo elemento
+    problematico non fa fallire tutte le pagine del chunk. Se però TUTTE le
+    sotto-immagini falliscono, è un guasto sistemico (server d'inferenza morto
+    per crash/throttling della GPU): in tal caso solleva un'eccezione invece di
+    restituire pagine vuote, così l'app se ne accorge (vedi main) e può
+    riavviare il worker anziché proseguire a vuoto.
     """
     if not subimgs:
         return []
+    layouts = None
     try:
         layouts = layout_pred(subimgs)
         preds = rec_pred(subimgs, layouts, full_page=True)
     except Exception:
         try:
             preds = rec_pred(subimgs, full_page=True)
+            layouts = None
         except Exception:
-            return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
+            return _infer_per_subimage_or_raise(subimgs, rec_pred, layout_pred)
     if not preds or len(preds) != len(subimgs):
-        return [_safe_infer_subimage(s, rec_pred, layout_pred) for s in subimgs]
-    return [_pred_to_result(p, s.size) for p, s in zip(preds, subimgs)]
+        return _infer_per_subimage_or_raise(subimgs, rec_pred, layout_pred)
+    results = []
+    for idx, (p, s) in enumerate(zip(preds, subimgs)):
+        text, html, structs = _pred_to_result(p, s.size)
+        layout_i = layouts[idx] if layouts else None
+        results.append((text, html, structs, _suspect_empty(text, layout_i)))
+    return results
 
 
-def _safe_infer_subimage(img: Image.Image, rec_pred, layout_pred) -> tuple:
-    """_infer_subimage che non solleva mai: in caso di errore restituisce vuoto."""
-    try:
-        return _infer_subimage(img, rec_pred, layout_pred)
-    except Exception:
-        return "", "", []
+def _infer_per_subimage_or_raise(subimgs: list, rec_pred, layout_pred) -> list:
+    """Inferenza per singola sotto-immagine con rilevamento guasto sistemico.
+
+    Ritenta ogni sotto-immagine isolatamente. Le pagine che falliscono restano
+    vuote (una pagina illeggibile non deve bloccare il chunk), ma se falliscono
+    TUTTE solleva RuntimeError: significa che il server d'inferenza è caduto,
+    non che le pagine siano bianche.
+    """
+    results = []
+    errors = 0
+    for s in subimgs:
+        try:
+            results.append(_infer_subimage(s, rec_pred, layout_pred))
+        except Exception:
+            results.append(("", "", [], False))
+            errors += 1
+    if errors == len(subimgs):
+        raise RuntimeError(
+            "Il server d'inferenza Surya non risponde "
+            "(possibile crash o throttling della GPU)."
+        )
+    return results
 
 
 def _ocr_batch(pages: list, rec_pred, layout_pred) -> list:
     """OCR di più pagine in un unico batch.
 
     pages è una lista di (img, forced_angle). Restituisce una lista di
-    (text, angle, html, structs) nello stesso ordine delle pagine in input.
+    (text, angle, html, structs, suspect) nello stesso ordine delle pagine.
 
     Le pagine vengono appiattite in sotto-immagini (split doppia-pagina),
     processate tutte insieme in un solo forward pass, poi ri-raggruppate.
@@ -254,7 +311,7 @@ def _ocr_batch(pages: list, rec_pred, layout_pred) -> list:
 
 def _ocr_page(img: Image.Image, rec_pred, layout_pred,
               forced_angle: Optional[int] = None) -> tuple:
-    """Restituisce (text, angle_applied, html, structs).
+    """Restituisce (text, angle_applied, html, structs, suspect).
 
     Usa full_page=True (PROMPT_TYPE_HIGH_ACCURACY_BBOX): un'unica chiamata VLM
     sull'intera pagina, più accurata del block mode (PROMPT_TYPE_BLOCK).
@@ -319,12 +376,13 @@ def main():
                     (Image.open(p).convert("RGB"), forced_angle) for p in paths
                 ]
                 results = _ocr_batch(pages, rec_pred, layout_pred)
-                for text, angle, html, structs in results:
+                for text, angle, html, structs, suspect in results:
                     items.append({
                         "text": text,
                         "angle": angle,
                         "html": html,
                         "blocks": structs,
+                        "suspect": suspect,
                     })
                 print(json.dumps({"type": "results", "items": items}), flush=True)
             except Exception as e:
@@ -336,7 +394,7 @@ def main():
 
         try:
             img = Image.open(path).convert("RGB")
-            text, angle, html, structs = _ocr_page(
+            text, angle, html, structs, suspect = _ocr_page(
                 img, rec_pred, layout_pred, forced_angle=forced_angle)
             print(json.dumps({
                 "type": "result",
@@ -344,6 +402,7 @@ def main():
                 "angle": angle,
                 "html": html,
                 "blocks": structs,
+                "suspect": suspect,
             }), flush=True)
         except Exception as e:
             print(json.dumps({"type": "error", "message": str(e)}), flush=True)

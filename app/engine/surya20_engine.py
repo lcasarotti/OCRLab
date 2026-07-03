@@ -81,6 +81,7 @@ class Surya20Engine(SuryaEngine):
         pages_text: list = []
         pages_html: list = []
         pages_blocks: list = []
+        deg_state = {"suspect": 0, "empty": 0, "restarts": 0, "seen_text": False}
 
         try:
             for start in range(0, total, batch_size):
@@ -95,9 +96,17 @@ class Surya20Engine(SuryaEngine):
                     pix.save(img_path)
                     paths.append(img_path)
 
-                # forced_angle sempre None in 0.20 (nessuna auto-rotazione)
-                results = self._send_batch(proc, paths, None)
-                for text, _angle, html, blocks in results:
+                # forced_angle sempre None in 0.20 (nessuna auto-rotazione).
+                # _send_with_retry riavvia il worker e ritenta una volta se il
+                # server d'inferenza crasha o si blocca (throttling GPU);
+                # _maybe_recover_degraded gestisce il degrado "silenzioso"
+                # (pagine vuote pur con layout di testo).
+                send = lambda p, pp=list(paths): self._send_batch(p, pp, None)
+                results = self._send_with_retry(send, cancel_event)
+                results = self._maybe_recover_degraded(
+                    results, send, cancel_event, deg_state, len(pages_text)
+                )
+                for text, _angle, html, blocks, _suspect in results:
                     pages_text.append(text.strip())
                     pages_html.append(html)
                     pages_blocks.append(blocks)

@@ -11,10 +11,12 @@ SuryaEngine usa l'import diretto (modalità senza subprocess).
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Callable, Optional
 
 try:
@@ -441,13 +443,43 @@ class SuryaEngine:
     _WORKER_NAME = "surya_worker.py"
     _PDF_DPI = 150
 
+    # Watchdog: budget di tempo (secondi) per la risposta del worker.
+    # _READY_TIMEOUT_S copre l'avvio (caricamento modelli + warm-up).
+    # _PAGE_TIMEOUT_S è il budget per pagina; il budget totale di un batch
+    # è max(_MIN_IPC_TIMEOUT_S, _PAGE_TIMEOUT_S * n_pagine). Se un throttling
+    # o un crash della GPU blocca il server d'inferenza, allo scadere il worker
+    # viene riavviato e il batch ritentato una volta (vedi _send_with_retry).
+    _READY_TIMEOUT_S = 600
+    _PAGE_TIMEOUT_S = 120
+    _MIN_IPC_TIMEOUT_S = 240
+
+    # Rilevamento degrado GPU, a due livelli:
+    #  - _EMPTY_STALL_PAGES: pagine "sospette vuote" consecutive (layout con
+    #    testo ma riconoscimento vuoto). Segnale preciso e veloce; le pagine
+    #    legittimamente senza testo (bianche o sole illustrazioni) NON sono
+    #    sospette e non contano, quindi niente falsi allarmi.
+    #  - _EMPTY_STALL_HARD: pagine interamente vuote consecutive (a prescindere
+    #    da suspect), dopo aver già prodotto testo. Rete di sicurezza per il
+    #    degrado totale in cui anche il layout tace: soglia alta perché una lunga
+    #    sequenza di sole tavole è rara ma possibile.
+    # In entrambi i casi: riavvio del worker e, se il degrado persiste oltre
+    # _MAX_RESTARTS riavvii, notifica all'utente e interruzione.
+    _EMPTY_STALL_PAGES = 3
+    _EMPTY_STALL_HARD = 30
+    _MAX_RESTARTS = 3
+
     def __init__(self, python_exe: str = ""):
         self._python_exe = _resolve_python_exe(python_exe, self._VENV_NAME)
         self._proc = None
         self._stderr_lines: list[str] = []
+        self._stdout_q: "queue.Queue" = queue.Queue()
         self._last_html: str = ""
         self._last_blocks: list = []
         self._supports_batch: bool = False
+
+    def _ipc_timeout(self, n_pages: int) -> float:
+        """Budget di tempo per la risposta del worker a un batch di n pagine."""
+        return max(self._MIN_IPC_TIMEOUT_S, self._PAGE_TIMEOUT_S * max(1, n_pages))
 
     def _get_worker_path(self) -> str:
         """Percorso del worker script per questo engine."""
@@ -483,6 +515,7 @@ class SuryaEngine:
             raise FileNotFoundError(f"Worker Surya non trovato: {worker}")
 
         self._stderr_lines = []
+        self._stdout_q = queue.Queue()
         proc = subprocess.Popen(
             [self._python_exe, worker],
             stdin=subprocess.PIPE,
@@ -495,6 +528,7 @@ class SuryaEngine:
         )
 
         stderr_lines = self._stderr_lines
+        stdout_q = self._stdout_q
 
         def _drain():
             try:
@@ -503,26 +537,96 @@ class SuryaEngine:
             except Exception:
                 pass
 
-        threading.Thread(target=_drain, daemon=True).start()
-
-        msg = None
-        while msg is None:
-            ready_line = proc.stdout.readline()
-            if not ready_line:
-                proc.wait()
-                stderr = "".join(self._stderr_lines)
-                raise RuntimeError(f"Il worker Surya non ha risposto.\n{stderr[:500]}")
-            ready_line = ready_line.strip()
-            if not ready_line:
-                continue
+        def _read_stdout():
+            # Legge lo stdout del worker in background e accoda le righe.
+            # Un sentinella None segnala la chiusura dello stream (EOF).
             try:
-                msg = json.loads(ready_line)
-            except json.JSONDecodeError:
-                continue
+                for line in proc.stdout:
+                    stdout_q.put(line)
+            except Exception:
+                pass
+            finally:
+                stdout_q.put(None)
+
+        threading.Thread(target=_drain, daemon=True).start()
+        threading.Thread(target=_read_stdout, daemon=True).start()
+
+        # L'assegnazione a self._proc è necessaria perché _next_message legga
+        # dalla coda di questo proc; se il ready non arriva, azzeriamo di nuovo.
+        self._proc = proc
+        try:
+            msg = self._next_message(self._READY_TIMEOUT_S)
+        except RuntimeError:
+            self._proc = None
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
         if msg.get("type") == "error":
+            self._proc = None
             raise RuntimeError(msg.get("message", "Errore sconosciuto nel worker"))
         self._supports_batch = bool(msg.get("batch"))
-        self._proc = proc
+
+    def _next_message(self, timeout: float) -> dict:
+        """Legge il prossimo messaggio JSON dallo stdout del worker.
+
+        Attende al massimo `timeout` secondi complessivi. Le righe vuote o non
+        JSON (es. warning stampati dal server d'inferenza) vengono ignorate
+        senza azzerare il budget. Solleva RuntimeError se il worker chiude lo
+        stream (EOF/crash) o non risponde entro il timeout (blocco della GPU):
+        in entrambi i casi il messaggio include la coda dello stderr per la
+        diagnosi.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stderr = "".join(self._stderr_lines[-20:])
+                raise RuntimeError(
+                    "Il worker Surya non risponde da "
+                    f"{int(timeout)} s (possibile blocco della GPU).\n{stderr[-500:]}"
+                )
+            try:
+                line = self._stdout_q.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                stderr = "".join(self._stderr_lines[-20:])
+                raise RuntimeError(
+                    f"Il worker Surya ha smesso di rispondere.\n{stderr[-500:]}"
+                )
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+    def _restart_worker(self) -> None:
+        """Riavvia il worker dopo un crash/blocco del server d'inferenza.
+
+        stop() + start() ricaricano i modelli (costoso) ma è l'unico modo per
+        recuperare da un crash della GPU. Aggiorna self._proc.
+        """
+        self.stop()
+        self.start()
+
+    def _send_with_retry(self, send_fn, cancel_event):
+        """Esegue send_fn(self._proc); se il worker crasha o va in timeout,
+        riavvia il worker e ritenta una sola volta.
+
+        send_fn riceve il proc corrente e deve sollevare RuntimeError/OSError se
+        la comunicazione fallisce. Un secondo fallimento propaga l'eccezione.
+        """
+        try:
+            return send_fn(self._proc)
+        except (RuntimeError, OSError):
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("OCR interrotto dall'utente.")
+            self._restart_worker()
+            return send_fn(self._proc)
 
     def stop(self) -> None:
         """Ferma il subprocess worker."""
@@ -604,59 +708,94 @@ class SuryaEngine:
     def _send_image(self, proc, img_path: str, forced_angle) -> tuple:
         """Invia un'immagine al worker e attende il risultato.
 
-        Restituisce (text, angle, html, blocks). html e blocks sono stringhe/liste
-        vuote per worker 0.17.x che non li producono.
+        Restituisce (text, angle, html, blocks, suspect). html/blocks sono
+        vuoti per worker 0.17.x; suspect (pagina vuota ma layout con testo →
+        degrado GPU) è False se il worker non lo emette.
         """
         cmd = json.dumps({"path": img_path, "forced_angle": forced_angle})
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
-        msg = None
-        while msg is None:
-            line = proc.stdout.readline()
-            if not line:
-                raise RuntimeError("Il worker Surya ha smesso di rispondere.")
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        msg = self._next_message(self._ipc_timeout(1))
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore nel worker"))
-        return msg.get("text", ""), msg.get("angle"), msg.get("html", ""), msg.get("blocks", [])
+        return (msg.get("text", ""), msg.get("angle"), msg.get("html", ""),
+                msg.get("blocks", []), bool(msg.get("suspect", False)))
 
     def _send_batch(self, proc, paths: list, forced_angle) -> list:
         """Invia un batch di immagini al worker e attende i risultati.
 
-        Restituisce una lista di (text, angle, html, blocks), una per path,
-        nello stesso ordine di input.
+        Restituisce una lista di (text, angle, html, blocks, suspect), una per
+        path, nello stesso ordine di input.
         """
-        cmd = json.dumps({"paths": list(paths), "forced_angle": forced_angle})
+        paths = list(paths)
+        cmd = json.dumps({"paths": paths, "forced_angle": forced_angle})
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
-        msg = None
-        while msg is None:
-            line = proc.stdout.readline()
-            if not line:
-                raise RuntimeError("Il worker Surya ha smesso di rispondere.")
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        msg = self._next_message(self._ipc_timeout(len(paths)))
         if msg.get("type") == "error":
             raise RuntimeError(msg.get("message", "Errore nel worker"))
         items = msg.get("items", [])
         return [
-            (it.get("text", ""), it.get("angle"), it.get("html", ""), it.get("blocks", []))
+            (it.get("text", ""), it.get("angle"), it.get("html", ""),
+             it.get("blocks", []), bool(it.get("suspect", False)))
             for it in items
         ]
 
+    def _maybe_recover_degraded(self, results, resend_fn, cancel_event, state,
+                                pages_done):
+        """Rileva il degrado della GPU (pagine vuote in serie) e tenta il recupero.
+
+        `results` è la lista di tuple con `suspect` (bool) come ultimo elemento e
+        `text` come primo. `resend_fn(proc)` ri-invia lo stesso batch. `state` è
+        un dict con chiavi "suspect", "empty", "restarts", "seen_text" mantenute
+        tra le chiamate.
+
+        Due livelli (vedi costanti di classe): un batch interamente "sospetto
+        vuoto" (soglia bassa, preciso) oppure una lunga serie di pagine vuote pur
+        avendo già prodotto testo (soglia alta, catch-all). Al superamento di una
+        soglia riavvia il worker e ritenta il batch; se il degrado persiste oltre
+        _MAX_RESTARTS riavvii solleva RuntimeError, così l'utente viene avvisato
+        invece di ricevere pagine vuote in silenzio. Restituisce i risultati
+        (eventualmente sostituiti dal retry andato a buon fine).
+        """
+        texts = [r[0].strip() for r in results]
+        if any(texts):
+            state["seen_text"] = True
+
+        if results and all(r[-1] for r in results):
+            state["suspect"] += len(results)
+        else:
+            state["suspect"] = 0
+        if results and state.get("seen_text") and not any(texts):
+            state["empty"] += len(results)
+        else:
+            state["empty"] = 0
+
+        tripped = (state["suspect"] >= self._EMPTY_STALL_PAGES
+                   or state["empty"] >= self._EMPTY_STALL_HARD)
+        if not tripped:
+            return results
+
+        if state["restarts"] >= self._MAX_RESTARTS:
+            raise RuntimeError(
+                "Il motore Surya continua a restituire pagine vuote dopo "
+                f"{state['restarts']} riavvii (pagine completate: {pages_done}): "
+                "probabile degrado o throttling della GPU. Interrompi e riprova; "
+                "se il problema persiste riduci il batch o riavvia l'applicazione."
+            )
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("OCR interrotto dall'utente.")
+        state["restarts"] += 1
+        self._restart_worker()
+        results = resend_fn(self._proc)
+        if any(r[0].strip() for r in results):
+            state["suspect"] = 0
+            state["empty"] = 0
+            state["seen_text"] = True
+        return results
+
     def _subprocess_image(self, file_path, proc, on_progress) -> str:
-        text, _, html, blocks = self._send_image(proc, file_path, None)
+        text, _, html, blocks, _suspect = self._send_image(proc, file_path, None)
         self._last_html = html
         self._last_blocks = [blocks] if blocks else []
         if on_progress:
@@ -671,6 +810,7 @@ class SuryaEngine:
         pages_html = []
         pages_blocks = []
         doc_angle: Optional[int] = None
+        deg_state = {"suspect": 0, "empty": 0, "restarts": 0, "seen_text": False}
 
         try:
             for i, page in enumerate(doc):
@@ -681,7 +821,14 @@ class SuryaEngine:
                 img_path = os.path.join(tmp_dir, f"page_{i:04d}.png")
                 pix.save(img_path)
 
-                text, angle, html, blocks = self._send_image(proc, img_path, doc_angle)
+                send_one = lambda p, ip=img_path, da=doc_angle: [
+                    self._send_image(p, ip, da)
+                ]
+                results = self._send_with_retry(send_one, cancel_event)
+                results = self._maybe_recover_degraded(
+                    results, send_one, cancel_event, deg_state, len(pages_text)
+                )
+                text, angle, html, blocks, _suspect = results[0]
                 if doc_angle is None and angle is not None:
                     doc_angle = angle
                 pages_text.append(text.strip())
