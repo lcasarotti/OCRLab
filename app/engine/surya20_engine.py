@@ -28,31 +28,34 @@ class Surya20Engine(SuryaEngine):
     _WORKER_NAME = "surya20_worker.py"
     _PDF_DPI = 300
 
+    # Pagine per batch quando il batch è attivo: oltre questo limite Surya non
+    # regge su GPU consumer (throttling/degrado VRAM).
+    _BATCH_SIZE = 4
+
     _daemon: ClassVar[Optional["Surya20Engine"]] = None
     _daemon_lock: ClassVar[threading.Lock] = threading.Lock()
 
     @staticmethod
-    def _batch_size() -> int:
-        """Numero di pagine per batch, da config (default 4, minimo 1)."""
+    def _batch_enabled() -> bool:
+        """True se l'utente ha attivato il processamento a batch (default True)."""
         try:
             from app.config import load_config
-            val = int(load_config().get("surya20_batch_size", 4))
-            return max(1, val)
+            return bool(load_config().get("surya20_batch", True))
         except Exception:
-            return 4
+            return True
 
-    @staticmethod
-    def _parallel() -> int:
-        """Slot paralleli del server di inferenza, da config (default 8, minimo 1)."""
-        try:
-            from app.config import load_config
-            val = int(load_config().get("surya20_parallel", 8))
-            return max(1, val)
-        except Exception:
-            return 8
+    @classmethod
+    def _batch_size(cls) -> int:
+        """Pagine per batch: _BATCH_SIZE se il batch è attivo, altrimenti 1."""
+        return cls._BATCH_SIZE if cls._batch_enabled() else 1
+
+    @classmethod
+    def _parallel(cls) -> int:
+        """Slot paralleli del server di inferenza: allineati al batch size."""
+        return cls._batch_size()
 
     def _build_worker_env(self) -> dict:
-        """Env del worker con SURYA_INFERENCE_PARALLEL impostato da config.
+        """Env del worker con SURYA_INFERENCE_PARALLEL allineato al batch.
 
         Il valore è letto dal server di inferenza (llama.cpp/vllm) al momento
         dello spawn: controlla sia gli slot --parallel del server sia i thread

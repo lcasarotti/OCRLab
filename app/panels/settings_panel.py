@@ -175,30 +175,12 @@ class SettingsPanel(wx.Panel):
         )
         self._ocr_sizer.Add(self.lbl_surya20_note, 0, wx.LEFT | wx.BOTTOM, 5)
 
-        self.row_surya20_batch = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_surya20_batch = wx.StaticText(
-            self, label=_("Pages per batch (Surya 0.2):"))
-        self.row_surya20_batch.Add(
-            self.lbl_surya20_batch, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.spin_surya20_batch = wx.SpinCtrl(self, min=1, max=64, initial=4, size=(70, -1))
-        self.spin_surya20_batch.SetToolTip(
-            _("Number of PDF pages processed together in one GPU call. "
-              "Higher is faster on large documents but uses more memory."))
-        self.row_surya20_batch.Add(self.spin_surya20_batch, 0)
-        self._ocr_sizer.Add(self.row_surya20_batch, 0, wx.ALL, 5)
-
-        self.row_surya20_parallel = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_surya20_parallel = wx.StaticText(
-            self, label=_("Parallel server slots (Surya 0.2):"))
-        self.row_surya20_parallel.Add(
-            self.lbl_surya20_parallel, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.spin_surya20_parallel = wx.SpinCtrl(self, min=1, max=64, initial=8, size=(70, -1))
-        self.spin_surya20_parallel.SetToolTip(
-            _("Concurrent requests handled by the inference server "
-              "(SURYA_INFERENCE_PARALLEL). Best set equal to the pages-per-batch "
-              "value. More slots need more VRAM; restart the Surya 0.2 server to apply."))
-        self.row_surya20_parallel.Add(self.spin_surya20_parallel, 0)
-        self._ocr_sizer.Add(self.row_surya20_parallel, 0, wx.ALL, 5)
+        self.chk_surya20_batch = wx.CheckBox(self, label=_("Process in batch (Surya 0.2)"))
+        self.chk_surya20_batch.SetToolTip(
+            _("On: process 4 PDF pages per GPU call (faster on large documents, "
+              "uses more VRAM). Off: one page at a time. Restart the Surya 0.2 "
+              "server to apply."))
+        self._ocr_sizer.Add(self.chk_surya20_batch, 0, wx.ALL, 5)
 
         self.row_surya20_server = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_surya20_start = wx.Button(self, label=_("Start server"))
@@ -536,10 +518,7 @@ class SettingsPanel(wx.Panel):
         self.txt_surya20_python.Show(is_surya20)
         self.btn_browse_surya20_python.Show(is_surya20)
         self.lbl_surya20_note.Show(is_surya20)
-        self.lbl_surya20_batch.Show(is_surya20)
-        self.spin_surya20_batch.Show(is_surya20)
-        self.lbl_surya20_parallel.Show(is_surya20)
-        self.spin_surya20_parallel.Show(is_surya20)
+        self.chk_surya20_batch.Show(is_surya20)
         self.btn_surya20_start.Show(is_surya20)
         self.btn_surya20_stop.Show(is_surya20)
         self.lbl_surya20_server_status.Show(is_surya20)
@@ -717,8 +696,7 @@ class SettingsPanel(wx.Panel):
         self.cmb_vlm_model.SetValue(self.config.get("vlm_model", ""))
         self.txt_surya_python.SetValue(self.config.get("surya_python", ""))
         self.txt_surya20_python.SetValue(self.config.get("surya20_python", ""))
-        self.spin_surya20_batch.SetValue(int(self.config.get("surya20_batch_size", 4)))
-        self.spin_surya20_parallel.SetValue(int(self.config.get("surya20_parallel", 8)))
+        self.chk_surya20_batch.SetValue(bool(self.config.get("surya20_batch", True)))
         self.txt_chandra_python.SetValue(self.config.get("chandra_python", ""))
         chandra_method = self.config.get("chandra_method", "vllm")
         self.rb_chandra_method.SetSelection(0 if chandra_method == "vllm" else 1)
@@ -1173,8 +1151,7 @@ class SettingsPanel(wx.Panel):
         self.config["vlm_model"] = self.cmb_vlm_model.GetValue()
         self.config["surya_python"] = self.txt_surya_python.GetValue()
         self.config["surya20_python"] = self.txt_surya20_python.GetValue()
-        self.config["surya20_batch_size"] = self.spin_surya20_batch.GetValue()
-        self.config["surya20_parallel"] = self.spin_surya20_parallel.GetValue()
+        self.config["surya20_batch"] = self.chk_surya20_batch.GetValue()
         self.config["chandra_python"] = self.txt_chandra_python.GetValue()
         self.config["chandra_method"] = "vllm" if self.rb_chandra_method.GetSelection() == 0 else "hf"
         self.config["chandra_vllm_url"] = self.txt_chandra_vllm_url.GetValue()
