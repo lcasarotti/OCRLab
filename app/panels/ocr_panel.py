@@ -276,21 +276,44 @@ class OCRPanel(wx.Panel):
             wildcard=wildcard,
             style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
         )
-        if dlg.ShowModal() == wx.ID_OK:
-            path = dlg.GetPath()
+        result = dlg.ShowModal()
+        path = dlg.GetPath()
+        dlg.Destroy()
+        if result != wx.ID_OK:
+            return
+
+        ocr_result = self.ocr_result
+        source_path = self.file_path
+        blocks = self._last_blocks or None
+        html = self._last_html
+
+        self.btn_save.Enable(False)
+        self.main_frame.set_status(_("Saving: {path}").format(path=path))
+
+        def _run():
             try:
                 write_file(
-                    self.ocr_result, path,
-                    source_path=self.file_path,
-                    blocks=self._last_blocks or None,
-                    html=self._last_html,
+                    ocr_result, path,
+                    source_path=source_path,
+                    blocks=blocks,
+                    html=html,
                 )
-                self.main_frame.set_status(_("Saved: {path}").format(path=path))
-                self._speak(_("File saved."))
+                wx.CallAfter(self._save_done, path)
             except Exception as e:
-                wx.MessageBox(
-                    _("Error saving: {e}").format(e=e),
-                    _("Error"),
-                    wx.OK | wx.ICON_ERROR,
-                )
-        dlg.Destroy()
+                wx.CallAfter(self._save_error, str(e))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _save_done(self, path):
+        self.btn_save.Enable(True)
+        self.main_frame.set_status(_("Saved: {path}").format(path=path))
+        self._speak(_("File saved."))
+
+    def _save_error(self, error: str):
+        self.btn_save.Enable(True)
+        self.main_frame.set_status(_("Error saving: {e}").format(e=error))
+        wx.MessageBox(
+            _("Error saving: {e}").format(e=error),
+            _("Error"),
+            wx.OK | wx.ICON_ERROR,
+        )

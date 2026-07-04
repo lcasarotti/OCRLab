@@ -79,6 +79,7 @@
   "Save OCR result": "Salva risultato OCR",
   "Text file (*.txt)|*.txt|Word document (*.docx)|*.docx|Searchable PDF (*.pdf)|*.pdf": "File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx|PDF ricercabile (*.pdf)|*.pdf",
   "Text file (*.txt)|*.txt|Word document (*.docx)|*.docx|HTML document (*.html)|*.html|Searchable PDF (*.pdf)|*.pdf": "File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx|Documento HTML (*.html)|*.html|PDF ricercabile (*.pdf)|*.pdf",
+  "Saving: {path}": "Salvataggio: {path}",
   "Saved: {path}": "Salvato: {path}",
   "File saved.": "File salvato.",
   "Error saving: {e}": "Errore nel salvataggio: {e}",
