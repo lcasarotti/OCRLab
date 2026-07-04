@@ -5,7 +5,7 @@ import sys
 
 import wx
 
-from app.config import load_config, save_config
+from app.config import load_config, save_config, ENABLE_CHANDRA
 from app.i18n import _, get_language, AVAILABLE_LANGUAGES
 from app.panels.ocr_panel import OCRPanel
 from app.panels.correction_panel import CorrectionPanel
@@ -26,6 +26,8 @@ ID_INSTALL_SURYA = wx.NewIdRef()
 ID_UNINSTALL_SURYA = wx.NewIdRef()
 ID_INSTALL_SURYA20 = wx.NewIdRef()
 ID_UNINSTALL_SURYA20 = wx.NewIdRef()
+ID_INSTALL_CHANDRA = wx.NewIdRef()
+ID_UNINSTALL_CHANDRA = wx.NewIdRef()
 ID_INSTALL_TESSERACT = wx.NewIdRef()
 ID_TESSERACT_LANGS = wx.NewIdRef()
 ID_CHECK_UPDATES = wx.NewIdRef()
@@ -95,6 +97,10 @@ class MainFrame(wx.Frame):
         tools_menu.Append(ID_INSTALL_SURYA20, _("Install Surya 0.2 (requires Docker / llama.cpp)..."))
         tools_menu.Append(ID_UNINSTALL_SURYA20, _("Uninstall Surya 0.2..."))
         tools_menu.AppendSeparator()
+        if ENABLE_CHANDRA:
+            tools_menu.Append(ID_INSTALL_CHANDRA, _("Install Chandra..."))
+            tools_menu.Append(ID_UNINSTALL_CHANDRA, _("Uninstall Chandra..."))
+            tools_menu.AppendSeparator()
         if not _IS_MAC:
             tools_menu.Append(ID_INSTALL_TESSERACT, _("Install Tesseract OCR..."))
         tools_menu.Append(ID_TESSERACT_LANGS, _("Tesseract OCR languages..."))
@@ -157,6 +163,9 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_uninstall_surya, id=ID_UNINSTALL_SURYA)
         self.Bind(wx.EVT_MENU, self._on_install_surya20, id=ID_INSTALL_SURYA20)
         self.Bind(wx.EVT_MENU, self._on_uninstall_surya20, id=ID_UNINSTALL_SURYA20)
+        if ENABLE_CHANDRA:
+            self.Bind(wx.EVT_MENU, self._on_install_chandra, id=ID_INSTALL_CHANDRA)
+            self.Bind(wx.EVT_MENU, self._on_uninstall_chandra, id=ID_UNINSTALL_CHANDRA)
         if not _IS_MAC:
             self.Bind(wx.EVT_MENU, self._on_install_tesseract, id=ID_INSTALL_TESSERACT)
         self.Bind(wx.EVT_MENU, self._on_tesseract_langs, id=ID_TESSERACT_LANGS)
@@ -318,6 +327,52 @@ class MainFrame(wx.Frame):
         if ok:
             wx.MessageBox(
                 _("Surya 0.2 uninstalled successfully."),
+                _("Uninstall complete"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+        else:
+            wx.MessageBox(
+                _("Error during uninstallation:\n{msg}").format(msg=msg),
+                _("Error"),
+                wx.OK | wx.ICON_ERROR,
+            )
+
+    def _on_install_chandra(self, _event):
+        from app.engine.chandra_installer import is_chandra_installed, ChandraInstallDialog
+        from app.engine.chandra_installer import _CHANDRA_VENV_DIR
+        if is_chandra_installed():
+            wx.MessageBox(
+                _("Chandra is already installed.\n\nVenv: {path}").format(path=_CHANDRA_VENV_DIR),
+                _("Chandra"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        dlg = ChandraInstallDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_uninstall_chandra(self, _event):
+        from app.engine.chandra_installer import uninstall_chandra, _CHANDRA_VENV_DIR
+        if not os.path.isdir(_CHANDRA_VENV_DIR):
+            wx.MessageBox(
+                _("Chandra is not installed."),
+                _("Uninstall Chandra"),
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        with wx.MessageDialog(
+            self,
+            _("The Chandra venv directory will be deleted.\nContinue?"),
+            _("Uninstall Chandra"),
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        ) as dlg:
+            dlg.SetYesNoLabels(_("Yes"), _("No"))
+            if dlg.ShowModal() != wx.ID_YES:
+                return
+        ok, msg = uninstall_chandra()
+        if ok:
+            wx.MessageBox(
+                _("Chandra uninstalled successfully."),
                 _("Uninstall complete"),
                 wx.OK | wx.ICON_INFORMATION,
             )

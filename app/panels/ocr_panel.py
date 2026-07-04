@@ -173,11 +173,7 @@ class OCRPanel(wx.Panel):
                     result = engine.process(file_path, on_progress=on_progress,
                                             cancel_event=cancel, on_partial=on_partial)
                 elif ocr_engine == "chandra":
-                    engine = ChandraEngine(
-                        method=config.get("chandra_method", "vllm"),
-                        python_exe=config.get("chandra_python", ""),
-                        vllm_url=config.get("chandra_vllm_url", "http://localhost:8000"),
-                    )
+                    engine = ChandraEngine.get_daemon() or ChandraEngine(python_exe=config.get("chandra_python", ""))
                     result = engine.process(file_path, on_progress=on_progress,
                                             cancel_event=cancel, on_partial=on_partial)
                 else:

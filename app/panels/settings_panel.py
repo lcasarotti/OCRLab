@@ -217,102 +217,38 @@ class SettingsPanel(wx.Panel):
         self.row_chandra_python.Add(self.btn_browse_chandra_python, 0)
         self._ocr_sizer.Add(self.row_chandra_python, 0, wx.EXPAND | wx.ALL, 5)
 
-        self.row_chandra_method = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_chandra_method = wx.StaticText(self, label=_("Chandra method:"))
-        self.row_chandra_method.Add(self.lbl_chandra_method, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.rb_chandra_method = wx.RadioBox(
-            self,
-            label="",
-            choices=[
-                _("vLLM (WSL server, recommended)"),
-                _("HuggingFace (subprocess Windows)"),
-            ],
-            majorDimension=2,
-            style=wx.RA_SPECIFY_COLS,
-        )
-        self.row_chandra_method.Add(self.rb_chandra_method, 0)
-        self._ocr_sizer.Add(self.row_chandra_method, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+        self.row_chandra_install = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_chandra_install = wx.Button(self, label=_("Install Chandra..."))
+        self.row_chandra_install.Add(self.btn_chandra_install, 0, wx.RIGHT, 10)
+        self._ocr_sizer.Add(self.row_chandra_install, 0, wx.ALL, 5)
 
-        self.row_chandra_vllm_url = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_chandra_vllm_url = wx.StaticText(self, label=_("vLLM server URL:"))
-        self.row_chandra_vllm_url.Add(self.lbl_chandra_vllm_url, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.txt_chandra_vllm_url = wx.TextCtrl(self, size=(280, -1))
-        self.row_chandra_vllm_url.Add(self.txt_chandra_vllm_url, 1, wx.EXPAND | wx.RIGHT, 5)
-        self.btn_detect_wsl_ip = wx.Button(self, label=_("Detect WSL IP"))
-        self.row_chandra_vllm_url.Add(self.btn_detect_wsl_ip, 0)
-        self._ocr_sizer.Add(self.row_chandra_vllm_url, 0, wx.EXPAND | wx.ALL, 5)
+        row_chandra_tok = wx.BoxSizer(wx.HORIZONTAL)
+        self.lbl_chandra_tokens = wx.StaticText(self, label=_("Max output tokens per page:"))
+        row_chandra_tok.Add(self.lbl_chandra_tokens, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.spin_chandra_tokens = wx.SpinCtrl(self, min=1024, max=16384, initial=8192)
+        self.spin_chandra_tokens.SetIncrement(1024)
+        self.spin_chandra_tokens.SetToolTip(
+            _("Higher: long pages fully captured but slower. Lower: faster. "
+              "Default 8192. Restart the Chandra server to apply."))
+        row_chandra_tok.Add(self.spin_chandra_tokens, 0)
+        self._ocr_sizer.Add(row_chandra_tok, 0, wx.ALL, 5)
 
-        self.rb_vllm_quant = wx.RadioBox(
-            self,
-            label=_("Quantization"),
-            choices=["float16", "fp8  (Blackwell / Ada)", "AWQ / GPTQ"],
-            majorDimension=3,
-            style=wx.RA_SPECIFY_COLS,
-        )
-        self._ocr_sizer.Add(self.rb_vllm_quant, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
-
-        row_vllm_tok = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_vllm_tokens = wx.StaticText(self, label=_("Max tokens per page:"))
-        row_vllm_tok.Add(self.lbl_vllm_tokens, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.spin_vllm_tokens = wx.SpinCtrl(self, min=512, max=8192, initial=3072)
-        self.spin_vllm_tokens.SetIncrement(256)
-        row_vllm_tok.Add(self.spin_vllm_tokens, 0)
-        self._ocr_sizer.Add(row_vllm_tok, 0, wx.ALL, 5)
-
-        row_vllm_gpu = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_vllm_gpu = wx.StaticText(self, label=_("GPU usage (%):"))
-        row_vllm_gpu.Add(self.lbl_vllm_gpu, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.spin_vllm_gpu = wx.SpinCtrl(self, min=50, max=100, initial=88)
-        self.spin_vllm_gpu.SetIncrement(5)
-        row_vllm_gpu.Add(self.spin_vllm_gpu, 0)
-        self._ocr_sizer.Add(row_vllm_gpu, 0, wx.ALL, 5)
-
-        row_vllm_model = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_vllm_hf_model = wx.StaticText(self, label=_("HuggingFace model:"))
-        row_vllm_model.Add(self.lbl_vllm_hf_model, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.txt_vllm_hf_model = wx.TextCtrl(self, size=(320, -1))
-        row_vllm_model.Add(self.txt_vllm_hf_model, 1, wx.EXPAND)
-        self._ocr_sizer.Add(row_vllm_model, 0, wx.EXPAND | wx.ALL, 5)
-
-        row_vllm_distro = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_vllm_distro = wx.StaticText(self, label=_("WSL distribution:"))
-        row_vllm_distro.Add(self.lbl_vllm_distro, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.cmb_vllm_distro = wx.ComboBox(self, choices=[], style=wx.CB_DROPDOWN, size=(220, -1))
-        row_vllm_distro.Add(self.cmb_vllm_distro, 1, wx.EXPAND | wx.RIGHT, 5)
-        self.btn_detect_distros = wx.Button(self, label=_("Detect distribution"))
-        row_vllm_distro.Add(self.btn_detect_distros, 0)
-        self._ocr_sizer.Add(row_vllm_distro, 0, wx.EXPAND | wx.ALL, 5)
-
-        self.chk_vllm_eager = wx.CheckBox(
-            self, label=_("Eager mode (recommended with VRAM ≤ 8 GB)")
-        )
-        self._ocr_sizer.Add(self.chk_vllm_eager, 0, wx.ALL, 5)
-
-        row_vllm_extra = wx.BoxSizer(wx.HORIZONTAL)
-        self.lbl_vllm_extra = wx.StaticText(self, label=_("Additional arguments:"))
-        row_vllm_extra.Add(self.lbl_vllm_extra, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.txt_vllm_extra = wx.TextCtrl(self, size=(380, -1))
-        row_vllm_extra.Add(self.txt_vllm_extra, 1, wx.EXPAND)
-        self._ocr_sizer.Add(row_vllm_extra, 0, wx.EXPAND | wx.ALL, 5)
-
-        row_vllm_srv = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_start_vllm = wx.Button(self, label=_("Start server"))
-        row_vllm_srv.Add(self.btn_start_vllm, 0, wx.RIGHT, 5)
-        self.btn_stop_vllm = wx.Button(self, label=_("Stop server"))
-        self.btn_stop_vllm.Enable(False)
-        row_vllm_srv.Add(self.btn_stop_vllm, 0, wx.RIGHT, 5)
-        self.btn_vllm_log = wx.Button(self, label=_("Show log"))
-        row_vllm_srv.Add(self.btn_vllm_log, 0, wx.RIGHT, 10)
-        self.lbl_vllm_status = wx.StaticText(self, label=_("Server not started."))
-        row_vllm_srv.Add(self.lbl_vllm_status, 0, wx.ALIGN_CENTER_VERTICAL)
-        self._ocr_sizer.Add(row_vllm_srv, 0, wx.ALL, 5)
+        self.row_chandra_server = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_chandra_start = wx.Button(self, label=_("Start server"))
+        self.row_chandra_server.Add(self.btn_chandra_start, 0, wx.RIGHT, 5)
+        self.btn_chandra_stop = wx.Button(self, label=_("Stop server"))
+        self.btn_chandra_stop.Enable(False)
+        self.row_chandra_server.Add(self.btn_chandra_stop, 0, wx.RIGHT, 10)
+        self.lbl_chandra_server_status = wx.StaticText(self, label=_("Server not started."))
+        self.row_chandra_server.Add(self.lbl_chandra_server_status, 0, wx.ALIGN_CENTER_VERTICAL)
+        self._ocr_sizer.Add(self.row_chandra_server, 0, wx.ALL, 5)
 
         self.lbl_chandra_note = wx.StaticText(
             self,
-            label=_("Chandra 2 (Datalab): state-of-the-art VLM model for complex documents.\n"
+            label=_("Chandra 2 (Datalab): large VLM model (~4B) for complex documents.\n"
                     "Supports 90+ languages, tables, manuscripts and multi-column layout.\n"
-                    "vLLM: start the server with 'bash /root/vllm/start_chandra.sh' in WSL.\n"
-                    "HF Windows: pip install chandra-ocr[hf] in the indicated venv."),
+                    "Runs locally on GPU with 4-bit quantization. Needs an NVIDIA GPU\n"
+                    "(12 GB+ VRAM recommended). Slow on consumer hardware (minutes per page)."),
         )
         self._ocr_sizer.Add(self.lbl_chandra_note, 0, wx.LEFT | wx.BOTTOM, 5)
 
@@ -434,12 +370,9 @@ class SettingsPanel(wx.Panel):
         self.btn_surya20_start.Bind(wx.EVT_BUTTON, self._on_surya20_start)
         self.btn_surya20_stop.Bind(wx.EVT_BUTTON, self._on_surya20_stop)
         self.btn_browse_chandra_python.Bind(wx.EVT_BUTTON, self._on_browse_chandra_python)
-        self.rb_chandra_method.Bind(wx.EVT_RADIOBOX, self._on_ocr_engine_changed)
-        self.btn_detect_wsl_ip.Bind(wx.EVT_BUTTON, self._on_detect_wsl_ip)
-        self.btn_detect_distros.Bind(wx.EVT_BUTTON, self._on_detect_distros)
-        self.btn_start_vllm.Bind(wx.EVT_BUTTON, self._on_start_vllm)
-        self.btn_stop_vllm.Bind(wx.EVT_BUTTON, self._on_stop_vllm)
-        self.btn_vllm_log.Bind(wx.EVT_BUTTON, self._on_show_vllm_log)
+        self.btn_chandra_install.Bind(wx.EVT_BUTTON, self._on_chandra_install)
+        self.btn_chandra_start.Bind(wx.EVT_BUTTON, self._on_chandra_start)
+        self.btn_chandra_stop.Bind(wx.EVT_BUTTON, self._on_chandra_stop)
         self.btn_refresh_langs.Bind(wx.EVT_BUTTON, self._on_refresh_langs)
         self.btn_refresh_ollama.Bind(wx.EVT_BUTTON, self._on_refresh_ollama)
         self.btn_library_ollama.Bind(wx.EVT_BUTTON, self._on_library_ollama)
@@ -524,28 +457,18 @@ class SettingsPanel(wx.Panel):
         self.lbl_surya20_server_status.Show(is_surya20)
         if is_surya20:
             self._update_surya20_server_ui()
-        self.lbl_chandra_method.Show(is_chandra)
-        self.rb_chandra_method.Show(is_chandra)
+        self.lbl_chandra_python.Show(is_chandra)
+        self.txt_chandra_python.Show(is_chandra)
+        self.btn_browse_chandra_python.Show(is_chandra)
+        self.btn_chandra_install.Show(is_chandra)
+        self.lbl_chandra_tokens.Show(is_chandra)
+        self.spin_chandra_tokens.Show(is_chandra)
+        self.btn_chandra_start.Show(is_chandra)
+        self.btn_chandra_stop.Show(is_chandra)
+        self.lbl_chandra_server_status.Show(is_chandra)
         self.lbl_chandra_note.Show(is_chandra)
-        chandra_is_vllm = is_chandra and self.rb_chandra_method.GetSelection() == 0
-        chandra_is_hf = is_chandra and self.rb_chandra_method.GetSelection() == 1
-        self.lbl_chandra_vllm_url.Show(chandra_is_vllm)
-        self.txt_chandra_vllm_url.Show(chandra_is_vllm)
-        self.btn_detect_wsl_ip.Show(chandra_is_vllm)
-        self.lbl_chandra_python.Show(chandra_is_hf)
-        self.txt_chandra_python.Show(chandra_is_hf)
-        self.btn_browse_chandra_python.Show(chandra_is_hf)
-        for ctrl in (
-            self.rb_vllm_quant,
-            self.lbl_vllm_tokens, self.spin_vllm_tokens,
-            self.lbl_vllm_gpu, self.spin_vllm_gpu,
-            self.lbl_vllm_hf_model, self.txt_vllm_hf_model,
-            self.lbl_vllm_distro, self.cmb_vllm_distro, self.btn_detect_distros,
-            self.chk_vllm_eager,
-            self.lbl_vllm_extra, self.txt_vllm_extra,
-            self.btn_start_vllm, self.btn_stop_vllm, self.btn_vllm_log, self.lbl_vllm_status,
-        ):
-            ctrl.Show(chandra_is_vllm)
+        if is_chandra:
+            self._update_chandra_server_ui()
         self.Layout()
 
     def _load_winocr_langs_bg(self):
@@ -698,21 +621,7 @@ class SettingsPanel(wx.Panel):
         self.txt_surya20_python.SetValue(self.config.get("surya20_python", ""))
         self.chk_surya20_batch.SetValue(bool(self.config.get("surya20_batch", True)))
         self.txt_chandra_python.SetValue(self.config.get("chandra_python", ""))
-        chandra_method = self.config.get("chandra_method", "vllm")
-        self.rb_chandra_method.SetSelection(0 if chandra_method == "vllm" else 1)
-        self.txt_chandra_vllm_url.SetValue(self.config.get("chandra_vllm_url", "http://localhost:8000"))
-        _quant_map = {"float16": 0, "fp8": 1, "awq": 2}
-        self.rb_vllm_quant.SetSelection(
-            _quant_map.get(self.config.get("vllm_quantization", "fp8"), 1)
-        )
-        self.spin_vllm_tokens.SetValue(self.config.get("vllm_max_tokens", 3072))
-        self.spin_vllm_gpu.SetValue(self.config.get("vllm_gpu_memory", 88))
-        self.txt_vllm_hf_model.SetValue(
-            self.config.get("vllm_hf_model", "datalab-to/chandra-ocr-2")
-        )
-        self.cmb_vllm_distro.SetValue(self.config.get("vllm_wsl_distro", ""))
-        self.chk_vllm_eager.SetValue(self.config.get("vllm_enforce_eager", True))
-        self.txt_vllm_extra.SetValue(self.config.get("vllm_extra_args", "--max-num-seqs 1"))
+        self.spin_chandra_tokens.SetValue(self.config.get("chandra_max_tokens", 8192))
         self.chk_join_hyphenated.SetValue(self.config.get("join_hyphenated", False))
         if _IS_MACOS:
             self.chk_apple_vision_lang_correction.SetValue(
@@ -852,131 +761,61 @@ class SettingsPanel(wx.Panel):
         self.main_frame.set_status(_("Surya 0.2 server stopped."))
         self._speak(_("Surya 0.2 server stopped."))
 
-    def _on_detect_wsl_ip(self, _event):
-        import subprocess
-        self._speak(_("Detecting WSL IP."))
-        try:
-            result = subprocess.run(
-                ["wsl.exe", "-e", "hostname", "-I"],
-                capture_output=True, text=True, timeout=10,
-            )
-            ip = result.stdout.strip().split()[0] if result.stdout.strip() else ""
-            if ip:
-                url = f"http://{ip}:8000"
-                self.txt_chandra_vllm_url.SetValue(url)
-                self.main_frame.set_status(_("WSL IP detected: {ip}").format(ip=ip))
-                self._speak(_("WSL IP: {ip}").format(ip=ip))
-            else:
-                wx.MessageBox(
-                    _("Cannot detect WSL IP.\nEnter the vLLM server URL manually."),
-                    _("Warning"), wx.OK | wx.ICON_WARNING,
-                )
-        except Exception as e:
-            wx.MessageBox(
-                _("Error detecting WSL IP:\n{e}").format(e=e),
-                _("Error"), wx.OK | wx.ICON_ERROR,
-            )
+    def _on_chandra_install(self, _event):
+        from app.engine.chandra_installer import ChandraInstallDialog
+        dlg = ChandraInstallDialog(self)
+        dlg.ShowModal()
+        dlg.Destroy()
 
-    def _on_detect_distros(self, _event):
-        from app.engine import vllm_server
-        self._speak(_("Detecting WSL distributions."))
-        distros = vllm_server.list_wsl_distros()
-        if distros:
-            self.cmb_vllm_distro.Set(distros)
-            saved = self.config.get("vllm_wsl_distro", "")
-            if saved in distros:
-                self.cmb_vllm_distro.SetValue(saved)
-            else:
-                self.cmb_vllm_distro.SetValue(distros[0])
-            n = len(distros)
-            self.main_frame.set_status(_("Found {n} WSL distributions.").format(n=n))
-            self._speak(_("Found {n} WSL distributions.").format(n=n))
-        else:
-            wx.MessageBox(
-                _("No WSL distribution found.\nVerify that WSL2 is installed and active."),
-                _("Warning"), wx.OK | wx.ICON_WARNING,
-            )
+    def _update_chandra_server_ui(self):
+        from app.engine.chandra_engine import ChandraEngine
+        running = ChandraEngine.is_daemon_running()
+        self.btn_chandra_start.Enable(not running)
+        self.btn_chandra_stop.Enable(running)
+        label = _("Server ready.") if running else _("Server not started.")
+        self.lbl_chandra_server_status.SetLabel(label)
 
-    def _on_start_vllm(self, _event):
-        from app.engine import vllm_server
-
-        config = self.get_config()
-        url = config.get("chandra_vllm_url", "http://localhost:8000")
-
-        self.btn_start_vllm.Enable(False)
-        self.btn_stop_vllm.Enable(False)
-        self.lbl_vllm_status.SetLabel(_("Starting..."))
-        self.main_frame.set_status(_("Starting vLLM server..."))
-        self._speak(_("Starting vLLM server."))
+    def _on_chandra_start(self, _event):
+        from app.engine.chandra_engine import ChandraEngine
+        python_exe = self.txt_chandra_python.GetValue()
+        self.btn_chandra_start.Enable(False)
+        self.btn_chandra_stop.Enable(False)
+        self.lbl_chandra_server_status.SetLabel(_("Starting..."))
+        self.main_frame.set_status(_("Starting Chandra server..."))
+        self._speak(_("Starting Chandra server."))
 
         def _run():
             try:
-                vllm_server.start(config)
-
-                def _tick(elapsed):
-                    mins, secs = divmod(elapsed, 60)
-                    label = _("Loading model... {m}m {s:02d}s").format(m=mins, s=secs)
-                    wx.CallAfter(self.lbl_vllm_status.SetLabel, label)
-
-                ready = vllm_server.wait_ready(url, timeout=300, on_tick=_tick)
-                if ready:
-                    wx.CallAfter(self._vllm_ready)
-                else:
-                    msg = (
-                        _("Timeout: server not responding.")
-                        if vllm_server.is_alive()
-                        else _("The process stopped unexpectedly.")
-                    )
-                    wx.CallAfter(self._vllm_failed, msg)
+                ChandraEngine.start_daemon(python_exe=python_exe)
+                wx.CallAfter(self._chandra_server_ready)
             except Exception as e:
-                wx.CallAfter(self._vllm_failed, str(e))
+                wx.CallAfter(self._chandra_server_failed, str(e))
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _vllm_ready(self):
-        self.btn_start_vllm.Enable(False)
-        self.btn_stop_vllm.Enable(True)
-        self.lbl_vllm_status.SetLabel(_("Server ready."))
-        self.main_frame.set_status(_("vLLM server ready."))
-        self._speak(_("vLLM server ready."))
+    def _chandra_server_ready(self):
+        self.btn_chandra_start.Enable(False)
+        self.btn_chandra_stop.Enable(True)
+        self.lbl_chandra_server_status.SetLabel(_("Server ready."))
+        self.main_frame.set_status(_("Chandra server ready."))
+        self._speak(_("Chandra server ready."))
 
-    def _vllm_failed(self, msg: str):
-        from app.engine import vllm_server
-        self.btn_start_vllm.Enable(True)
-        self.btn_stop_vllm.Enable(False)
-        self.lbl_vllm_status.SetLabel(_("Error: {error}").format(error=msg))
-        self.main_frame.set_status(_("Starting vLLM server startup error: {msg}").format(msg=msg))
-        self._speak(_("Starting vLLM server startup error: {msg}").format(msg=msg))
-        log = vllm_server.get_log()
-        detail = f"{msg}\n\n--- Log ---\n{log}" if log else msg
-        dlg = wx.MessageDialog(self, detail, _("vLLM server log"), wx.OK | wx.ICON_ERROR)
-        dlg.ShowModal()
-        dlg.Destroy()
+    def _chandra_server_failed(self, msg: str):
+        self.btn_chandra_start.Enable(True)
+        self.btn_chandra_stop.Enable(False)
+        self.lbl_chandra_server_status.SetLabel(_("Error: {error}").format(error=msg[:60]))
+        self.main_frame.set_status(_("Chandra server error: {msg}").format(msg=msg))
+        self._speak(_("Chandra server startup error."))
+        wx.MessageBox(msg, _("Chandra server error"), wx.OK | wx.ICON_ERROR)
 
-    def _on_show_vllm_log(self, _event):
-        from app.engine import vllm_server
-        log = vllm_server.get_log()
-        text = log if log else _("(no output available)")
-        dlg = wx.Dialog(self, title=_("vLLM server log"), size=(700, 500))
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        txt = wx.TextCtrl(dlg, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL)
-        txt.SetValue(text)
-        txt.SetInsertionPointEnd()
-        sizer.Add(txt, 1, wx.EXPAND | wx.ALL, 8)
-        btn_ok = wx.Button(dlg, wx.ID_OK, _("Close"))
-        sizer.Add(btn_ok, 0, wx.ALIGN_CENTER | wx.BOTTOM, 8)
-        dlg.SetSizer(sizer)
-        dlg.ShowModal()
-        dlg.Destroy()
-
-    def _on_stop_vllm(self, _event):
-        from app.engine import vllm_server
-        vllm_server.stop()
-        self.btn_start_vllm.Enable(True)
-        self.btn_stop_vllm.Enable(False)
-        self.lbl_vllm_status.SetLabel(_("Server stopped."))
-        self.main_frame.set_status(_("vLLM server stopped."))
-        self._speak(_("vLLM server stopped."))
+    def _on_chandra_stop(self, _event):
+        from app.engine.chandra_engine import ChandraEngine
+        ChandraEngine.stop_daemon()
+        self.btn_chandra_start.Enable(True)
+        self.btn_chandra_stop.Enable(False)
+        self.lbl_chandra_server_status.SetLabel(_("Server stopped."))
+        self.main_frame.set_status(_("Chandra server stopped."))
+        self._speak(_("Chandra server stopped."))
 
     def _on_browse_chandra_python(self, _event):
         if _IS_WINDOWS:
@@ -1153,16 +992,7 @@ class SettingsPanel(wx.Panel):
         self.config["surya20_python"] = self.txt_surya20_python.GetValue()
         self.config["surya20_batch"] = self.chk_surya20_batch.GetValue()
         self.config["chandra_python"] = self.txt_chandra_python.GetValue()
-        self.config["chandra_method"] = "vllm" if self.rb_chandra_method.GetSelection() == 0 else "hf"
-        self.config["chandra_vllm_url"] = self.txt_chandra_vllm_url.GetValue()
-        _quant_list = ["float16", "fp8", "awq"]
-        self.config["vllm_quantization"] = _quant_list[self.rb_vllm_quant.GetSelection()]
-        self.config["vllm_max_tokens"] = self.spin_vllm_tokens.GetValue()
-        self.config["vllm_gpu_memory"] = self.spin_vllm_gpu.GetValue()
-        self.config["vllm_hf_model"] = self.txt_vllm_hf_model.GetValue()
-        self.config["vllm_wsl_distro"] = self.cmb_vllm_distro.GetValue()
-        self.config["vllm_enforce_eager"] = self.chk_vllm_eager.IsChecked()
-        self.config["vllm_extra_args"] = self.txt_vllm_extra.GetValue()
+        self.config["chandra_max_tokens"] = self.spin_chandra_tokens.GetValue()
         self.config["join_hyphenated"] = self.chk_join_hyphenated.IsChecked()
         if _IS_MACOS:
             self.config["apple_vision_language_correction"] = (
@@ -1194,15 +1024,7 @@ class SettingsPanel(wx.Panel):
             "surya_python": self.txt_surya_python.GetValue(),
             "surya20_python": self.txt_surya20_python.GetValue(),
             "chandra_python": self.txt_chandra_python.GetValue(),
-            "chandra_method": "vllm" if self.rb_chandra_method.GetSelection() == 0 else "hf",
-            "chandra_vllm_url": self.txt_chandra_vllm_url.GetValue(),
-            "vllm_quantization": ["float16", "fp8", "awq"][self.rb_vllm_quant.GetSelection()],
-            "vllm_max_tokens": self.spin_vllm_tokens.GetValue(),
-            "vllm_gpu_memory": self.spin_vllm_gpu.GetValue(),
-            "vllm_hf_model": self.txt_vllm_hf_model.GetValue(),
-            "vllm_wsl_distro": self.cmb_vllm_distro.GetValue(),
-            "vllm_enforce_eager": self.chk_vllm_eager.IsChecked(),
-            "vllm_extra_args": self.txt_vllm_extra.GetValue(),
+            "chandra_max_tokens": self.spin_chandra_tokens.GetValue(),
             "join_hyphenated": self.chk_join_hyphenated.IsChecked(),
             "apple_vision_language_correction": (
                 self.chk_apple_vision_lang_correction.IsChecked() if _IS_MACOS else False

@@ -293,7 +293,7 @@ def get_lang_name_map() -> dict[str, str]:
 
 
 # Imposta a True per abilitare il motore Chandra nell'interfaccia
-ENABLE_CHANDRA = False
+ENABLE_CHANDRA = True
 
 DEFAULTS = {
     "tesseract_path": "",
@@ -316,15 +316,9 @@ DEFAULTS = {
     "skip_surya20_check": False,
     "surya20_batch": True,
     "chandra_python": "",
-    "chandra_method": "vllm",
-    "chandra_vllm_url": "http://localhost:8000",
-    "vllm_quantization": "fp8",
-    "vllm_max_tokens": 3072,
-    "vllm_gpu_memory": 84,
-    "vllm_enforce_eager": True,
-    "vllm_wsl_distro": "",
-    "vllm_hf_model": "datalab-to/chandra-ocr-2",
-    "vllm_extra_args": "--max-num-seqs 1",
+    "chandra_quantize": "4bit",
+    "chandra_max_tokens": 8192,
+    "skip_chandra_check": False,
     "join_hyphenated": False,
     "skip_tesseract_check": False,
     "streaming_text": False,

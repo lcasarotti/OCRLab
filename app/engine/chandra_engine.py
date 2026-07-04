@@ -1,343 +1,106 @@
-"""Motore OCR tramite Chandra (datalab-to/chandra-ocr-2).
+"""Motore OCR Chandra 2 (datalab-to/chandra-ocr-2).
 
-Chandra è un modello VLM che converte immagini e PDF in Markdown/HTML/JSON
-preservando il layout. Supera Surya su layout complessi, tabelle, testo
-multi-colonna e scrittura a mano.
+Chandra è il modello OCR "grande" di Datalab: un VLM (~4B parametri, Chandra 2)
+che converte immagini e PDF in Markdown/HTML preservando il layout, con bounding
+box per blocco. Supera Surya su tabelle, layout complessi, manoscritto e forme.
 
-Due modalità operative:
-  - "hf"   : esegue la CLI di Chandra in un subprocess Windows (lento, carica
-             il modello ogni volta). Richiede chandra-ocr[hf] nel venv Windows.
-  - "vllm" : usa il server vLLM già avviato in WSL (veloce, modello caricato
-             una volta, API OpenAI-compatible su http://localhost:8000).
-             Avviare il server con: bash /root/vllm/start_chandra.sh
+Architettura identica a Surya 0.2: ChandraEngine è una sottoclasse di SuryaEngine
+che punta al venv `chandra-venv` e al worker `chandra_worker.py`. Il modello gira
+in un subprocess persistente (daemon) nel venv isolato, caricato una volta con
+warm-up; il protocollo IPC (JSON stdin/stdout) e tutta la macchina di
+watchdog/retry sono ereditati da SuryaEngine.
 
-Installazione:
-  Windows (hf):  pip install chandra-ocr[hf]
-  WSL    (vllm): vedi /root/vllm/start_chandra.sh
+Il backend è HuggingFace (transformers) con quantizzazione 4-bit (bitsandbytes)
+per stare entro ~12 GB di VRAM. Nessun server vLLM/WSL.
 """
 
-import base64
-import io
-import json
-import os
-import re
-import shutil
-import subprocess
-import tempfile
 import threading
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
-try:
-    import pymupdf as fitz  # PyMuPDF >= 1.23
-except ImportError:
-    import fitz  # PyMuPDF < 1.23
-import requests
-from PIL import Image
+from app.engine.surya_engine import SuryaEngine
 
 
-# ---------------------------------------------------------------------------
-# Utilità comuni
-# ---------------------------------------------------------------------------
+class ChandraEngine(SuryaEngine):
+    """Motore OCR Chandra 2 (backend HuggingFace, 4-bit)."""
 
-def _strip_chandra_metadata(text: str) -> str:
-    """Rimuove frontmatter YAML e whitespace ridondante."""
-    text = re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, flags=re.DOTALL)
-    return text.strip()
+    _VENV_NAME = "chandra-venv"
+    _WORKER_NAME = "chandra_worker.py"
+    # Chandra rasterizza a ~192 DPI (settings.IMAGE_DPI); 200 è vicino e assicura
+    # risoluzione sufficiente. load_image nel worker riscala comunque a MIN_IMAGE_DIM.
+    _PDF_DPI = 200
 
+    # Un VLM 4B a 4-bit su GPU consumer può impiegare minuti per pagina: budget
+    # ampio prima di considerare la GPU bloccata e riavviare il worker.
+    _PAGE_TIMEOUT_S = 600
+    _MIN_IPC_TIMEOUT_S = 600
 
-def _image_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
-    """Converte un'immagine PIL in stringa base64."""
-    buf = io.BytesIO()
-    img.save(buf, format=fmt)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    _daemon: ClassVar[Optional["ChandraEngine"]] = None
+    _daemon_lock: ClassVar[threading.Lock] = threading.Lock()
 
-
-# ---------------------------------------------------------------------------
-# Modalità vLLM (server WSL)
-# ---------------------------------------------------------------------------
-
-def _vllm_ocr_page(image_b64: str, vllm_url: str, max_tokens: int = 4096) -> str:
-    """Invia una singola pagina (base64 PNG) al server vLLM e restituisce il testo."""
-    prompt = (
-        "Convert the image to markdown. "
-        "Preserve the document layout and reading order. "
-        "Output only the markdown text, no explanations."
-    )
-    payload = {
-        "model": "chandra",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.0,
-    }
-    # Disabilita i proxy di sistema: l'IP WSL non deve passare per proxy Windows
-    session = requests.Session()
-    session.trust_env = False
-    resp = session.post(
-        f"{vllm_url}/v1/chat/completions",
-        json=payload,
-        timeout=300,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
-
-
-# ---------------------------------------------------------------------------
-# Modalità hf (subprocess Windows)
-# ---------------------------------------------------------------------------
-
-def _chandra_exe(python_exe: str) -> str:
-    """Ricava il percorso dell'eseguibile 'chandra' dalla cartella Scripts del venv."""
-    if not python_exe:
-        return "chandra"
-    scripts_dir = os.path.dirname(python_exe)
-    for name in ("chandra.exe", "chandra"):
-        candidate = os.path.join(scripts_dir, name)
-        if os.path.isfile(candidate):
-            return candidate
-    return "chandra"
-
-
-def _find_md_output(output_dir: str, stem: str) -> Optional[str]:
-    """Trova il file .md prodotto da Chandra nella sottocartella output."""
-    candidate = os.path.join(output_dir, stem, f"{stem}.md")
-    if os.path.isfile(candidate):
-        return candidate
-    for root, _dirs, files in os.walk(output_dir):
-        for f in files:
-            if f.endswith(".md"):
-                return os.path.join(root, f)
-    return None
-
-
-def is_available_hf(python_exe: str = "") -> bool:
-    """Verifica se chandra-ocr è installato nel Python Windows indicato."""
-    exe = _chandra_exe(python_exe)
-    try:
-        result = subprocess.run(
-            [exe, "--help"],
-            capture_output=True, text=True, timeout=15,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def is_available_vllm(vllm_url: str = "http://localhost:8000") -> bool:
-    """Verifica se il server vLLM è raggiungibile."""
-    try:
-        resp = requests.get(f"{vllm_url}/health", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Engine principale
-# ---------------------------------------------------------------------------
-
-class ChandraEngine:
-    """Motore OCR Chandra.
-
-    Args:
-        method:     "vllm" (server WSL, raccomandato) o "hf" (subprocess Windows).
-        python_exe: percorso di python.exe del venv Windows con chandra[hf].
-                    Usato solo con method="hf".
-        vllm_url:   URL del server vLLM. Default: http://localhost:8000.
-        max_tokens: token massimi per pagina (vllm). Default: 4096.
-    """
-
-    def __init__(
-        self,
-        method: str = "vllm",
-        python_exe: str = "",
-        vllm_url: str = "http://localhost:8000",
-        max_tokens: int = 4096,
-    ):
-        self._method = method
-        self._python_exe = python_exe or "python"
-        self._vllm_url = vllm_url.rstrip("/")
-        self._max_tokens = max_tokens
+    def _build_worker_env(self) -> dict:
+        """Env del worker con la configurazione Chandra (quantizzazione, token)."""
+        env = super()._build_worker_env()
+        try:
+            from app.config import load_config
+            config = load_config()
+        except Exception:
+            config = {}
+        env["CHANDRA_QUANTIZE"] = str(config.get("chandra_quantize", "4bit"))
+        max_tokens = config.get("chandra_max_tokens")
+        if max_tokens:
+            env["MAX_OUTPUT_TOKENS"] = str(max_tokens)
+        return env
 
     def process(
         self,
         file_path: str,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-        cancel_event: Optional[threading.Event] = None,
-        on_partial: Optional[Callable[[str], None]] = None,
+        on_progress: Optional[Callable] = None,
+        cancel_event=None,
+        on_partial: Optional[Callable] = None,
     ) -> str:
-        """Esegue l'OCR su un file immagine o PDF.
+        """Esegue l'OCR via subprocess nel venv Chandra.
 
-        Returns:
-            Testo Markdown estratto.
-
-        Raises:
-            InterruptedError: se cancel_event viene impostato.
-            RuntimeError: per errori del motore.
+        A differenza di SuryaEngine non esiste una modalità "import diretto":
+        Chandra non è mai installato nel venv principale, quindi serve sempre il
+        subprocess. Se il venv non è configurato, errore esplicito.
         """
-        if cancel_event and cancel_event.is_set():
-            raise InterruptedError("OCR interrotto dall'utente.")
-
-        if self._method == "vllm":
-            return self._process_vllm(file_path, on_progress, cancel_event, on_partial)
-        else:
-            return self._process_hf(file_path, on_progress, cancel_event)
-
-    # ------------------------------------------------------------------
-    # Modalità vLLM
-    # ------------------------------------------------------------------
-
-    def _process_vllm(self, file_path, on_progress, cancel_event, on_partial=None) -> str:
-        """OCR via server vLLM: converte ogni pagina in immagine e la invia all'API."""
-        ext = os.path.splitext(file_path)[1].lower()
-
-        if ext == ".pdf":
-            return self._vllm_pdf(file_path, on_progress, cancel_event, on_partial)
-        else:
-            return self._vllm_image(file_path, on_progress)
-
-    def _vllm_image(self, file_path, on_progress) -> str:
-        img = Image.open(file_path).convert("RGB")
-        b64 = _image_to_base64(img)
-        if on_progress:
-            on_progress(0, 1)
-        text = _vllm_ocr_page(b64, self._vllm_url, self._max_tokens)
-        if on_progress:
-            on_progress(1, 1)
-        return _strip_chandra_metadata(text)
-
-    def _vllm_pdf(self, file_path, on_progress, cancel_event, on_partial=None) -> str:
-        doc = fitz.open(file_path)
-        total = len(doc)
-        pages_text = []
-
-        for i, page in enumerate(doc):
-            if cancel_event and cancel_event.is_set():
-                doc.close()
-                raise InterruptedError("OCR interrotto dall'utente.")
-
-            if on_progress:
-                on_progress(i, total)
-
-            pix = page.get_pixmap(dpi=150)
-            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            b64 = _image_to_base64(img)
-
-            text = _vllm_ocr_page(b64, self._vllm_url, self._max_tokens)
-            pages_text.append(_strip_chandra_metadata(text))
-
-            if on_partial:
-                on_partial("\f".join(pages_text))
-            if on_progress:
-                on_progress(i + 1, total)
-
-        doc.close()
-
-        return "\f".join(pages_text)
-
-    # ------------------------------------------------------------------
-    # Modalità hf (subprocess Windows)
-    # ------------------------------------------------------------------
-
-    def _process_hf(self, file_path, on_progress, cancel_event) -> str:
-        """OCR via CLI di Chandra in subprocess Windows."""
-        if on_progress:
-            on_progress(0, 1)
-
-        tmp_dir = tempfile.mkdtemp(prefix="chandra_ocr_")
-        try:
-            result_text = self._run_hf_subprocess(
-                file_path, tmp_dir, cancel_event, _chandra_exe(self._python_exe)
-            )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        if on_progress:
-            on_progress(1, 1)
-
-        return result_text
-
-    def _run_hf_subprocess(self, file_path, output_dir, cancel_event, chandra_exe) -> str:
-        cmd = [
-            chandra_exe,
-            file_path,
-            output_dir,
-            "--method", "hf",
-            "--no-images",
-            "--no-headers-footers",
-        ]
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-            )
-        except FileNotFoundError:
+        if not self._python_exe:
             raise RuntimeError(
-                f"Eseguibile Chandra non trovato: {chandra_exe}\n"
-                "Verifica il percorso Python nelle impostazioni.\n"
-                "Installazione: pip install chandra-ocr[hf]"
+                "Chandra non è installato.\n"
+                "Installalo dalle impostazioni (motore OCR → Chandra → Installa)."
             )
+        return self._process_subprocess(file_path, on_progress, cancel_event, on_partial)
 
-        stderr_lines: list[str] = []
+    # ------------------------------------------------------------------
+    # Daemon (processo persistente, tiene il modello caldo tra le sessioni)
+    # ------------------------------------------------------------------
 
-        def _drain():
-            try:
-                for line in proc.stderr:
-                    stderr_lines.append(line)
-            except Exception:
-                pass
+    @classmethod
+    def get_daemon(cls) -> Optional["ChandraEngine"]:
+        """Restituisce il daemon attivo, o None se non è in esecuzione."""
+        with cls._daemon_lock:
+            if cls._daemon is not None and not cls._daemon.is_running():
+                cls._daemon = None
+            return cls._daemon
 
-        drain_thread = threading.Thread(target=_drain, daemon=True)
-        drain_thread.start()
+    @classmethod
+    def is_daemon_running(cls) -> bool:
+        return cls.get_daemon() is not None
 
-        while True:
-            try:
-                proc.wait(timeout=0.5)
-                break
-            except subprocess.TimeoutExpired:
-                if cancel_event and cancel_event.is_set():
-                    proc.terminate()
-                    drain_thread.join(timeout=2)
-                    raise InterruptedError("OCR interrotto dall'utente.")
+    @classmethod
+    def start_daemon(cls, python_exe: str = "") -> None:
+        """Avvia il daemon (blocca fino a "ready"). Idempotente se già attivo."""
+        with cls._daemon_lock:
+            if cls._daemon is not None and cls._daemon.is_running():
+                return
+            inst = cls(python_exe=python_exe)
+            inst.start()
+            cls._daemon = inst
 
-        drain_thread.join(timeout=5)
-
-        if proc.returncode != 0:
-            stderr = "".join(stderr_lines)
-            if "No module named chandra" in stderr:
-                raise RuntimeError(
-                    "Chandra non trovato nel Python selezionato.\n"
-                    "Installa con: pip install chandra-ocr[hf]"
-                )
-            raise RuntimeError(
-                f"Chandra ha restituito un errore (codice {proc.returncode}).\n"
-                f"{stderr[:500]}"
-            )
-
-        stem = os.path.splitext(os.path.basename(file_path))[0]
-        md_path = _find_md_output(output_dir, stem)
-
-        if not md_path:
-            raise FileNotFoundError(
-                "Chandra non ha prodotto output.\n"
-                "Controlla che il file sia un'immagine o PDF valido."
-            )
-
-        with open(md_path, "r", encoding="utf-8") as f:
-            raw = f.read()
-
-        return _strip_chandra_metadata(raw)
+    @classmethod
+    def stop_daemon(cls) -> None:
+        """Ferma il daemon."""
+        with cls._daemon_lock:
+            if cls._daemon is not None:
+                cls._daemon.stop()
+                cls._daemon = None
