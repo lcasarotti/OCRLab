@@ -1,6 +1,7 @@
 """Motore OCR tramite Windows.Media.Ocr (WinRT nativo)."""
 
 import asyncio
+import html as _html
 import io
 import threading
 from typing import Callable
@@ -126,8 +127,14 @@ async def _pil_to_software_bitmap(image: Image.Image):
             pass
 
 
-async def _recognize_async(image: Image.Image, lang_tag: str) -> str:
-    """Esegue il riconoscimento OCR su una PIL Image."""
+async def _recognize_async(image: Image.Image, lang_tag: str):
+    """Esegue il riconoscimento OCR su una PIL Image.
+
+    Ritorna ``(testo, blocchi_riga)`` dove ``blocchi_riga`` è una lista di
+    ``{"label": "Text", "html": <testo>, "bbox": [x1,y1,x2,y2]}`` con bbox
+    normalizzata in [0,1]: serve al PDF ricercabile per posizionare il testo OCR
+    invisibile sopra la riga corrispondente dell'immagine.
+    """
     from winrt.windows.media.ocr import OcrEngine
     from winrt.windows.globalization import Language
 
@@ -149,25 +156,40 @@ async def _recognize_async(image: Image.Image, lang_tag: str) -> str:
 
     lines = list(result.lines)
     if not lines:
-        return ""
+        return "", []
 
     # OcrLine non espone bounding_rect; la geometria è disponibile sulle OcrWord.
-    # Calcoliamo la rect di ogni riga dalla prima e ultima parola.
-    def _line_top_bottom(line):
+    # Calcoliamo la rect completa di ogni riga dall'unione delle sue parole.
+    def _line_rect(line):
         words = list(line.words)
         if not words:
-            return None, None
-        top = min(w.bounding_rect.y for w in words)
-        bottom = max(w.bounding_rect.y + w.bounding_rect.height for w in words)
-        return top, bottom
+            return None
+        x1 = min(w.bounding_rect.x for w in words)
+        y1 = min(w.bounding_rect.y for w in words)
+        x2 = max(w.bounding_rect.x + w.bounding_rect.width for w in words)
+        y2 = max(w.bounding_rect.y + w.bounding_rect.height for w in words)
+        return (x1, y1, x2, y2)
 
-    tops_bottoms = [_line_top_bottom(ln) for ln in lines]
+    rects = [_line_rect(ln) for ln in lines]
 
-    # Altezza media delle righe con geometria valida
+    W, H = image.width, image.height
+    blocks = []
+    for ln, rc in zip(lines, rects):
+        line_text = ln.text.strip()
+        if not line_text:
+            continue
+        bbox = None
+        if rc and W and H:
+            bbox = [rc[0] / W, rc[1] / H, rc[2] / W, rc[3] / H]
+        blocks.append({"label": "Text", "html": _html.escape(line_text),
+                       "bbox": bbox})
+
+    # Altezza media delle righe con geometria valida (per separare i paragrafi).
+    tops_bottoms = [(rc[1], rc[3]) if rc else (None, None) for rc in rects]
     heights = [b - t for t, b in tops_bottoms if t is not None]
     if not heights:
         # Fallback: semplice join con a capo
-        return "\n".join(ln.text for ln in lines)
+        return "\n".join(ln.text for ln in lines), blocks
 
     avg_height = sum(heights) / len(heights)
     threshold = avg_height * 1.5
@@ -183,11 +205,15 @@ async def _recognize_async(image: Image.Image, lang_tag: str) -> str:
             separator = "\n"
         parts.append(separator + lines[idx].text)
 
-    return "".join(parts)
+    return "".join(parts), blocks
 
 
 class WindowsOCREngine:
     """Motore OCR che usa Windows.Media.Ocr (nativo Windows 10/11)."""
+
+    def __init__(self):
+        # Blocchi posizionali riga-per-riga (uno per pagina) per il PDF ricercabile.
+        self._last_line_blocks: list = []
 
     def process(
         self,
@@ -230,7 +256,8 @@ class WindowsOCREngine:
     ) -> str:
         """OCR su singola immagine."""
         img = Image.open(file_path).convert("RGB")
-        text = _run_winrt(_recognize_async(img, lang_tag))
+        text, blocks = _run_winrt(_recognize_async(img, lang_tag))
+        self._last_line_blocks = [blocks]
         if on_progress:
             on_progress(1, 1)
         return text.strip()
@@ -247,6 +274,7 @@ class WindowsOCREngine:
         doc = fitz.open(file_path)
         total = len(doc)
         pages_text = []
+        pages_blocks = []
 
         for i, page in enumerate(doc):
             if cancel_event and cancel_event.is_set():
@@ -256,8 +284,9 @@ class WindowsOCREngine:
             # Renderizza a 300 DPI come Tesseract, converti in RGB sicuro
             pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            text = _run_winrt(_recognize_async(img, lang_tag))
+            text, blocks = _run_winrt(_recognize_async(img, lang_tag))
             pages_text.append(text.strip())
+            pages_blocks.append(blocks)
 
             if on_partial:
                 on_partial("\f".join(pages_text))
@@ -266,4 +295,5 @@ class WindowsOCREngine:
 
         doc.close()
 
+        self._last_line_blocks = pages_blocks
         return "\f".join(pages_text)
