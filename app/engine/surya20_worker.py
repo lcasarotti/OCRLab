@@ -120,10 +120,15 @@ def _is_landscape(img: Image.Image) -> bool:
 def _split_subimages(img: Image.Image, forced_angle: Optional[int] = None) -> tuple:
     """Applica rotazione e split doppia-pagina, restituendo le sotto-immagini.
 
-    Restituisce (subimgs, angle_applied) dove subimgs è una lista di 1 o 2
-    immagini portrait pronte per l'inferenza (metà sinistra/destra per le
-    pagine landscape affiancate). Centralizza la logica di split/rotazione
-    così da poterla riusare sia nel percorso singolo che in quello batch.
+    Restituisce (subimgs, angle_applied, split_geom) dove subimgs è una lista di
+    1 o 2 immagini portrait pronte per l'inferenza (metà sinistra/destra per le
+    pagine landscape affiancate). Centralizza la logica di split/rotazione così
+    da poterla riusare sia nel percorso singolo che in quello batch.
+
+    split_geom è None se non c'è stato split, altrimenti (mid, w_full): la x del
+    taglio e la larghezza dell'immagine intera (post-rotazione), necessarie a
+    _combine_subresults per riportare le bbox delle due metà nello spazio della
+    pagina intera.
     """
     angle_applied: Optional[int] = None
 
@@ -135,34 +140,68 @@ def _split_subimages(img: Image.Image, forced_angle: Optional[int] = None) -> tu
     # Con forced_angle==None lo split è sempre ammesso; dopo una rotazione
     # esplicita lo split resta ammesso (le due metà si processano dritte).
     if _is_landscape(img):
-        mid = img.size[0] // 2
+        w_full = img.size[0]
+        mid = w_full // 2
         left = img.crop((0, 0, mid, img.size[1]))
-        right = img.crop((mid, 0, img.size[0], img.size[1]))
-        return [left, right], angle_applied
+        right = img.crop((mid, 0, w_full, img.size[1]))
+        return [left, right], angle_applied, (mid, w_full)
 
-    return [img], angle_applied
+    return [img], angle_applied, None
 
 
-def _combine_subresults(subresults: list, angle_applied: Optional[int]) -> tuple:
+def _reposition_split_structs(structs: list, x_offset: float, x_scale: float) -> None:
+    """Riporta le bbox di una metà di spread nello spazio della pagina intera.
+
+    Lo split doppia-pagina è una pura traslazione/riscalatura orizzontale
+    (nessuna rotazione): le metà hanno la stessa altezza della pagina intera,
+    quindi y resta invariata; x (normalizzata [0,1] sulla PROPRIA metà) diventa
+    `x_offset + x * x_scale`, normalizzata sull'immagine intera. Modifica gli
+    struct in place; salta quelli senza bbox (es. segnaposto immagine).
+    """
+    for st in structs:
+        bbox = st.get("bbox")
+        if not bbox:
+            continue
+        x1, y1, x2, y2 = bbox
+        st["bbox"] = [x_offset + x1 * x_scale, y1, x_offset + x2 * x_scale, y2]
+
+
+def _combine_subresults(subresults: list, angle_applied: Optional[int],
+                        split_geom: Optional[tuple] = None) -> tuple:
     """Combina i risultati (text, html, structs, suspect) di 1 o 2 sotto-immagini.
 
     subresults è una lista di tuple (text, html, structs, suspect) nell'ordine
-    sinistra→destra. Restituisce (text, angle, html, structs, suspect) per la
-    pagina; suspect è True solo se la pagina risulta interamente vuota ma almeno
-    una sotto-immagine aveva layout di testo (degrado GPU).
+    sinistra→destra. split_geom (mid, w_full) descrive lo split doppia-pagina, se
+    avvenuto. Restituisce (text, angle, html, structs, suspect) per la pagina;
+    suspect è True solo se la pagina risulta interamente vuota ma almeno una
+    sotto-immagine aveva layout di testo (degrado GPU).
     """
     texts = [t for t, _, _, _ in subresults if t]
     htmls = [h for _, h, _, _ in subresults if h]
+    # Le bbox sono nello spazio dell'immagine DRITTA data al modello (dopo
+    # eventuale rotazione + split). Restano tali: il writer del PDF raddrizza
+    # l'immagine con lo stesso angolo (passato dall'engine, non ri-rilevato) e
+    # NON ri-ruota queste bbox, evitando la doppia rotazione. Così il PDF
+    # ricercabile mantiene posizionamento e granularità dei tag anche sugli
+    # spread ruotati (non più solo il layer a flusso).
+    if split_geom is not None and len(subresults) == 2:
+        # Doppia pagina landscape: le bbox arrivano normalizzate sulla metà
+        # sinistra/destra. Le riportiamo nello spazio della pagina intera
+        # (traslazione+scala orizzontale, vedi _reposition_split_structs).
+        mid, w_full = split_geom
+        left_scale = mid / w_full if w_full else 0
+        right_off = mid / w_full if w_full else 0
+        right_scale = (w_full - mid) / w_full if w_full else 1
+        _reposition_split_structs(subresults[0][2], 0.0, left_scale)
+        _reposition_split_structs(subresults[1][2], right_off, right_scale)
+    elif len(subresults) > 1:
+        # Split senza geometria nota: bbox non utilizzabili → flusso.
+        for _, _, s, _ in subresults:
+            for st in s:
+                st["bbox"] = None
     structs = []
     for _, _, s, _ in subresults:
         structs.extend(s)
-    # Pagina divisa (doppia pagina landscape): le bbox sono normalizzate sulle
-    # sotto-immagini sinistra/destra, non sulla pagina intera, quindi non sono
-    # utilizzabili per posizionare il testo. Le azzeriamo → il PDF ricercabile
-    # ripiega sul layout a flusso per queste pagine.
-    if len(subresults) > 1:
-        for st in structs:
-            st["bbox"] = None
     combined_text = "\n\n".join(texts)
     suspect = (not combined_text.strip()) and any(s for _, _, _, s in subresults)
     return combined_text, angle_applied, "\n".join(htmls), structs, suspect
@@ -293,9 +332,11 @@ def _ocr_batch(pages: list, rec_pred, layout_pred) -> list:
     sub_imgs: list = []
     page_of: list = []          # per ogni sotto-immagine: indice pagina
     angles: list = [None] * len(pages)
+    geoms: list = [None] * len(pages)   # (mid, w_full) dello split, o None
     for pi, (img, forced_angle) in enumerate(pages):
-        subs, angle = _split_subimages(img, forced_angle)
+        subs, angle, geom = _split_subimages(img, forced_angle)
         angles[pi] = angle
+        geoms[pi] = geom
         for sub in subs:
             sub_imgs.append(sub)
             page_of.append(pi)
@@ -306,7 +347,8 @@ def _ocr_batch(pages: list, rec_pred, layout_pred) -> list:
     for j, res in enumerate(sub_results):
         grouped[page_of[j]].append(res)
 
-    return [_combine_subresults(grouped[pi], angles[pi]) for pi in range(len(pages))]
+    return [_combine_subresults(grouped[pi], angles[pi], geoms[pi])
+            for pi in range(len(pages))]
 
 
 def _ocr_page(img: Image.Image, rec_pred, layout_pred,
@@ -319,9 +361,9 @@ def _ocr_page(img: Image.Image, rec_pred, layout_pred,
     di loop/errore del decoder full-page.
     Gestisce pagine doppie affiancate (landscape) dividendo a metà.
     """
-    subimgs, angle_applied = _split_subimages(img, forced_angle)
+    subimgs, angle_applied, split_geom = _split_subimages(img, forced_angle)
     subresults = [_infer_subimage(sub, rec_pred, layout_pred) for sub in subimgs]
-    return _combine_subresults(subresults, angle_applied)
+    return _combine_subresults(subresults, angle_applied, split_geom)
 
 
 def _warmup(rec_pred, layout_pred) -> None:
@@ -367,14 +409,21 @@ def main():
             break
 
         # Comando batch: {"paths": [...], "forced_angle": null | int}
+        #   oppure con angoli per-pagina: {"paths": [...], "forced_angles": [...]}
         paths = cmd.get("paths")
         if isinstance(paths, list):
             forced_angle = cmd.get("forced_angle")
+            forced_angles = cmd.get("forced_angles")
             items = []
             try:
-                pages = [
-                    (Image.open(p).convert("RGB"), forced_angle) for p in paths
-                ]
+                pages = []
+                for idx, p in enumerate(paths):
+                    img = Image.open(p).convert("RGB")
+                    if isinstance(forced_angles, list) and idx < len(forced_angles):
+                        fa = forced_angles[idx]
+                    else:
+                        fa = forced_angle
+                    pages.append((img, fa))
                 results = _ocr_batch(pages, rec_pred, layout_pred)
                 for text, angle, html, structs, suspect in results:
                     items.append({

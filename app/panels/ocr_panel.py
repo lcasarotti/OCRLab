@@ -38,6 +38,7 @@ class OCRPanel(wx.Panel):
         self._last_html: str = ""
         self._last_blocks: list = []
         self._last_line_blocks: list = []
+        self._last_angles: list = []
 
         self._build_ui()
 
@@ -113,6 +114,7 @@ class OCRPanel(wx.Panel):
         self._last_html = ""
         self._last_blocks = []
         self._last_line_blocks = []
+        self._last_angles = []
         self.progress.SetValue(0)
         self.lbl_progress.SetLabel(_("Starting OCR..."))
         self._speak(_("Starting OCR."))
@@ -186,8 +188,9 @@ class OCRPanel(wx.Panel):
                 last_html = getattr(engine, '_last_html', '')
                 last_blocks = getattr(engine, '_last_blocks', [])
                 last_line_blocks = getattr(engine, '_last_line_blocks', [])
+                last_angles = getattr(engine, '_last_angles', [])
                 wx.CallAfter(self._ocr_done, result, last_html, last_blocks,
-                             last_line_blocks)
+                             last_line_blocks, last_angles)
             except InterruptedError:
                 wx.CallAfter(self._ocr_cancelled)
             except Exception as e:
@@ -220,7 +223,7 @@ class OCRPanel(wx.Panel):
             self._stream_display_len = len(display)
 
     def _ocr_done(self, result: str, last_html: str = "", last_blocks=None,
-                  last_line_blocks=None):
+                  last_line_blocks=None, last_angles=None):
         self._busy = False
         config = self.main_frame.settings_panel.get_config()
         if config.get("join_hyphenated", False):
@@ -230,6 +233,7 @@ class OCRPanel(wx.Panel):
         self._last_blocks = last_blocks if last_blocks is not None else []
         self._last_line_blocks = (
             last_line_blocks if last_line_blocks is not None else [])
+        self._last_angles = last_angles if last_angles is not None else []
         self.txt_result.SetValue(strip_markup(result))
         self.btn_start.Enable(True)
         self.btn_stop.Enable(False)
@@ -290,6 +294,7 @@ class OCRPanel(wx.Panel):
         blocks = self._last_blocks or None
         line_blocks = self._last_line_blocks or None
         html = self._last_html
+        angles = self._last_angles or None
 
         self.btn_save.Enable(False)
         self.main_frame.set_status(_("Saving: {path}").format(path=path))
@@ -302,6 +307,7 @@ class OCRPanel(wx.Panel):
                     blocks=blocks,
                     html=html,
                     line_blocks=line_blocks,
+                    angles=angles,
                 )
                 wx.CallAfter(self._save_done, path)
             except Exception as e:

@@ -475,6 +475,7 @@ class SuryaEngine:
         self._stdout_q: "queue.Queue" = queue.Queue()
         self._last_html: str = ""
         self._last_blocks: list = []
+        self._last_angles: list = []
         self._supports_batch: bool = False
 
     def _ipc_timeout(self, n_pages: int) -> float:
@@ -721,14 +722,20 @@ class SuryaEngine:
         return (msg.get("text", ""), msg.get("angle"), msg.get("html", ""),
                 msg.get("blocks", []), bool(msg.get("suspect", False)))
 
-    def _send_batch(self, proc, paths: list, forced_angle) -> list:
+    def _send_batch(self, proc, paths: list, forced_angle,
+                    forced_angles: Optional[list] = None) -> list:
         """Invia un batch di immagini al worker e attende i risultati.
 
         Restituisce una lista di (text, angle, html, blocks, suspect), una per
-        path, nello stesso ordine di input.
+        path, nello stesso ordine di input. `forced_angles`, se fornito, dà un
+        angolo di rotazione per pagina (allineato a `paths`); ha precedenza su
+        `forced_angle`, usato come valore unico per tutte le pagine.
         """
         paths = list(paths)
-        cmd = json.dumps({"paths": paths, "forced_angle": forced_angle})
+        payload = {"paths": paths, "forced_angle": forced_angle}
+        if forced_angles is not None:
+            payload["forced_angles"] = list(forced_angles)
+        cmd = json.dumps(payload)
         proc.stdin.write(cmd + "\n")
         proc.stdin.flush()
         msg = self._next_message(self._ipc_timeout(len(paths)))
@@ -795,9 +802,14 @@ class SuryaEngine:
         return results
 
     def _subprocess_image(self, file_path, proc, on_progress) -> str:
-        text, _, html, blocks, _suspect = self._send_image(proc, file_path, None)
+        text, angle, html, blocks, _suspect = self._send_image(proc, file_path, None)
         self._last_html = html
         self._last_blocks = [blocks] if blocks else []
+        # Angolo ORARIO con cui il writer del PDF deve raddrizzare l'immagine per
+        # combaciare col testo OCR. Il worker ruota in senso ANTIORARIO (PIL) di
+        # `angle`; il writer usa la convenzione oraria. None se non ruotata (il
+        # writer si autorileva via OSD, come prima).
+        self._last_angles = [(360 - angle) % 360 if angle else None]
         if on_progress:
             on_progress(1, 1)
         return text.strip()
@@ -809,6 +821,7 @@ class SuryaEngine:
         pages_text = []
         pages_html = []
         pages_blocks = []
+        pages_angles: list = []
         doc_angle: Optional[int] = None
         deg_state = {"suspect": 0, "empty": 0, "restarts": 0, "seen_text": False}
 
@@ -834,6 +847,9 @@ class SuryaEngine:
                 pages_text.append(text.strip())
                 pages_html.append(html)
                 pages_blocks.append(blocks)
+                # Angolo ORARIO per il writer (conversione dall'antiorario PIL
+                # del worker); None sulle pagine non ruotate → autorilevazione OSD.
+                pages_angles.append((360 - angle) % 360 if angle else None)
 
                 if on_partial:
                     on_partial("\f".join(pages_text))
@@ -850,6 +866,7 @@ class SuryaEngine:
 
         self._last_html = '<hr class="page-break">\n'.join(pages_html)
         self._last_blocks = pages_blocks
+        self._last_angles = pages_angles
         return "\f".join(pages_text)
 
     # ------------------------------------------------------------------

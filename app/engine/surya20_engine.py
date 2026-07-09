@@ -54,6 +54,27 @@ class Surya20Engine(SuryaEngine):
         """Slot paralleli del server di inferenza: allineati al batch size."""
         return cls._batch_size()
 
+    @staticmethod
+    def _detect_forced_angle(pix) -> Optional[int]:
+        """Angolo ANTIORARIO (convenzione PIL/worker) per raddrizzare la pagina.
+
+        La 0.20 non auto-rileva la rotazione (a differenza della 0.17), quindi la
+        rileviamo qui riusando l'OSD del writer del PDF (Tesseract) sul pixmap già
+        rasterizzato e la passiamo al worker: così le scansioni di lato — es. gli
+        spread doppia-pagina ruotati — arrivano dritte al modello e lo split a
+        metà scatta (altrimenti le due pagine restano fuse). Restituisce None se
+        non c'è rotazione affidabile. L'OSD restituisce gradi ORARI; il worker
+        ruota in senso antiorario (PIL), da cui la conversione.
+        """
+        try:
+            from app.formats.output_writer import _detect_rotation
+            rot = _detect_rotation(pix)  # 0/90/180/270 ORARI
+        except Exception:
+            return None
+        if rot in (90, 180, 270):
+            return (360 - rot) % 360
+        return None
+
     def _build_worker_env(self) -> dict:
         """Env del worker con SURYA_INFERENCE_PARALLEL allineato al batch.
 
@@ -69,11 +90,15 @@ class Surya20Engine(SuryaEngine):
     def _subprocess_pdf(self, file_path, proc, on_progress, cancel_event, on_partial=None) -> str:
         """OCR di un PDF processando le pagine a batch.
 
-        Se il worker non supporta il batch (bundle vecchio) o il batch size è 1,
-        delega all'implementazione pagina-per-pagina della classe base.
+        Se il worker non supporta il batch (bundle vecchio) delega
+        all'implementazione pagina-per-pagina della classe base. Col batch
+        disattivato (`batch_size==1`) NON deleghiamo: usiamo comunque questo loop
+        con chunk da una pagina, così la rilevazione di rotazione per pagina
+        (necessaria alla 0.20 per lo split degli spread ruotati) resta attiva —
+        un solo path per chunk rispetta comunque il tetto di una pagina in volo.
         """
         batch_size = self._batch_size()
-        if not self._supports_batch or batch_size <= 1:
+        if not self._supports_batch:
             return super()._subprocess_pdf(
                 file_path, proc, on_progress, cancel_event, on_partial
             )
@@ -84,6 +109,7 @@ class Surya20Engine(SuryaEngine):
         pages_text: list = []
         pages_html: list = []
         pages_blocks: list = []
+        pages_angles: list = []
         deg_state = {"suspect": 0, "empty": 0, "restarts": 0, "seen_text": False}
 
         try:
@@ -93,18 +119,22 @@ class Surya20Engine(SuryaEngine):
 
                 chunk = range(start, min(start + batch_size, total))
                 paths = []
+                angles = []
                 for i in chunk:
                     pix = doc[i].get_pixmap(dpi=self._PDF_DPI)
                     img_path = os.path.join(tmp_dir, f"page_{i:04d}.png")
                     pix.save(img_path)
                     paths.append(img_path)
+                    # Rotazione rilevata per pagina (la 0.20 non la auto-rileva):
+                    # raddrizza le scansioni di lato prima dello split doppia-pagina.
+                    angles.append(self._detect_forced_angle(pix))
 
-                # forced_angle sempre None in 0.20 (nessuna auto-rotazione).
                 # _send_with_retry riavvia il worker e ritenta una volta se il
                 # server d'inferenza crasha o si blocca (throttling GPU);
                 # _maybe_recover_degraded gestisce il degrado "silenzioso"
                 # (pagine vuote pur con layout di testo).
-                send = lambda p, pp=list(paths): self._send_batch(p, pp, None)
+                send = lambda p, pp=list(paths), aa=list(angles): self._send_batch(
+                    p, pp, None, forced_angles=aa)
                 results = self._send_with_retry(send, cancel_event)
                 results = self._maybe_recover_degraded(
                     results, send, cancel_event, deg_state, len(pages_text)
@@ -113,6 +143,13 @@ class Surya20Engine(SuryaEngine):
                     pages_text.append(text.strip())
                     pages_html.append(html)
                     pages_blocks.append(blocks)
+                    # Angolo (ORARIO) con cui il writer del PDF deve raddrizzare
+                    # l'immagine per farla combaciare con le bbox già dritte del
+                    # worker. Il worker ruota in senso ANTIORARIO (PIL) di `_angle`;
+                    # per il writer serve l'equivalente orario. None se la pagina
+                    # non è stata ruotata (il writer si autorileva come prima).
+                    pages_angles.append(
+                        (360 - _angle) % 360 if _angle else None)
 
                 if on_partial:
                     on_partial("\f".join(pages_text))
@@ -128,6 +165,7 @@ class Surya20Engine(SuryaEngine):
 
         self._last_html = '<hr class="page-break">\n'.join(pages_html)
         self._last_blocks = pages_blocks
+        self._last_angles = pages_angles
         return "\f".join(pages_text)
 
     @classmethod

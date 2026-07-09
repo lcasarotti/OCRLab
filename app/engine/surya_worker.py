@@ -4,13 +4,25 @@ Protocollo stdin/stdout (una riga JSON per messaggio):
   IN:   {"path": "<path_immagine>", "forced_angle": null | int}
   IN:   {"quit": true}
   OUT:  {"type": "ready"}
-  OUT:  {"type": "result", "text": "<testo>", "angle": null | int}
+  OUT:  {"type": "result", "text": "<testo>", "angle": null | int,
+         "html": "<html pagina>",
+         "blocks": [{"label": ..., "html": ..., "bbox": [x1,y1,x2,y2]|null}, ...]}
   OUT:  {"type": "error",  "message": "<messaggio>"}
+
+`blocks` (schema identico a Surya 0.20) trasporta il layout che questo worker
+già calcola (LayoutPredictor + assegnazione righe→blocchi), così il PDF
+ricercabile può usare il layer posizionale taggato invece del flusso. Le bbox
+sono normalizzate [0,1] nello spazio dell'immagine ORIGINALE: per questo i
+blocchi vengono esportati solo sulle pagine NON ruotate/splittate (vedi
+_ocr_page), altrimenti il writer, che raddrizza per conto suo, li ruoterebbe
+due volte.
 """
 
+import html
 import io
 import json
 import os
+import re
 import sys
 from typing import Optional
 
@@ -168,6 +180,101 @@ def _center_in_bbox(line_poly, block_poly) -> bool:
     return bx1 <= cx <= bx2 and by1 <= cy <= by2
 
 
+# Label di layout Surya 0.17 → vocabolario camelCase di Surya 0.2, atteso da
+# DOCX/HTML (_BLOCK_STYLE/_IMAGE_PLACEHOLDER in output_writer.py). Il PDF ignora
+# la label; le sconosciute ricadono su "Text".
+_LABEL_MAP = {
+    "Text": "Text",
+    "Title": "SectionHeader",
+    "Section-header": "SectionHeader",
+    "Page-header": "PageHeader",
+    "Page-footer": "PageFooter",
+    "List-item": "ListGroup",
+    "Table": "Table",
+    "Picture": "Picture",
+    "Figure": "Figure",
+    "Caption": "Caption",
+    "Footnote": "Footnote",
+}
+
+
+def _norm_poly_bbox(polygon, img_size) -> Optional[list]:
+    """Bbox del poligono normalizzata in [0,1] rispetto a img_size (w, h).
+
+    Come _norm_bbox di surya20_worker, ma parte da un polygon Surya 0.17 (lista
+    di punti). Normalizzando nello spazio pixel dell'immagine il writer del PDF
+    riposiziona il testo senza conoscere il DPI di rasterizzazione.
+    """
+    if not polygon or not img_size:
+        return None
+    w, h = img_size
+    if not w or not h:
+        return None
+    x1, y1, x2, y2 = _poly_bbox(polygon)
+    return [x1 / w, y1 / h, x2 / w, y2 / h]
+
+
+def _reposition_split_blocks(left_blocks, right_blocks, mid, w_full):
+    """Riporta i blocchi delle due metà di uno spread nello spazio intero.
+
+    Lo split doppia-pagina è una pura traslazione orizzontale (nessuna
+    rotazione): le due metà hanno la stessa altezza dell'immagine intera, quindi
+    y resta invariata; x viene riscalata. Le bbox in ingresso sono normalizzate
+    [0,1] rispetto alla PROPRIA metà; in uscita sono normalizzate rispetto
+    all'immagine intera (larghezza w_full, taglio a mid).
+    """
+    out = []
+    left_scale = mid / w_full if w_full else 0
+    right_w = w_full - mid
+    for b in left_blocks:
+        x1, y1, x2, y2 = b["bbox"]
+        out.append({**b, "bbox": [x1 * left_scale, y1, x2 * left_scale, y2]})
+    for b in right_blocks:
+        x1, y1, x2, y2 = b["bbox"]
+        nx1 = (mid + x1 * right_w) / w_full if w_full else x1
+        nx2 = (mid + x2 * right_w) / w_full if w_full else x2
+        out.append({**b, "bbox": [nx1, y1, nx2, y2]})
+    return out
+
+
+def _page_html_from_blocks(blocks) -> str:
+    """HTML di pagina dai blocchi, nello stesso formato di surya20_worker.
+
+    Ogni blocco → `<div class="block {css}">…</div>`, con la label camelCase
+    convertita in classe CSS kebab-case (es. "SectionHeader" → "section-header",
+    che l'export HTML già stila). Il testo del blocco è già HTML-escaped in
+    `b["html"]`; i newline diventano <br>.
+    """
+    parts = []
+    for b in blocks:
+        content = b.get("html", "")
+        if not content.strip():
+            continue
+        css = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", b.get("label", "Text")).lower()
+        parts.append(
+            f'<div class="block {css}">{content.replace(chr(10), "<br>")}</div>'
+        )
+    return "\n".join(parts)
+
+
+def _page_html_from_text(text: str) -> str:
+    """HTML di pagina dal solo flusso di testo, senza layout posizionale.
+
+    Fallback usato quando i `blocks` (schema Surya 0.20) non sono disponibili —
+    tipicamente sulle pagine ruotate/splittate, dove le bbox vengono soppresse
+    per non far ruotare due volte il PDF. Il testo di flusso usa "\\n\\n" come
+    separatore di paragrafo e "\\n" come a-capo interno: ogni paragrafo diventa
+    un `<div class="block text">…</div>`, così l'export HTML non resta vuoto.
+    """
+    parts = []
+    for para in text.split("\n\n"):
+        if not para.strip():
+            continue
+        esc = html.escape(para).replace("\n", "<br>")
+        parts.append(f'<div class="block text">{esc}</div>')
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # OCR di una singola immagine
 # ---------------------------------------------------------------------------
@@ -183,13 +290,15 @@ def _ocr_page(
     # Doppia pagina affiancata (landscape): divide a metà e processa ciascuna metà
     # in modo indipendente, così Surya riceve ogni pagina come immagine portrait.
     if forced_angle is None and img.size[0] > img.size[1] * 1.2:
-        mid = img.size[0] // 2
-        left_text,  _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
-                                   det_pred, rec_pred, layout_pred)
-        right_text, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
-                                   det_pred, rec_pred, layout_pred)
+        w_full = img.size[0]
+        mid = w_full // 2
+        left_text,  _, left_blocks  = _ocr_page(img.crop((0, 0, mid, img.size[1])),
+                                                 det_pred, rec_pred, layout_pred)
+        right_text, _, right_blocks = _ocr_page(img.crop((mid, 0, w_full, img.size[1])),
+                                                 det_pred, rec_pred, layout_pred)
         combined = "\n\n".join(t for t in (left_text, right_text) if t)
-        return combined, None
+        blocks = _reposition_split_blocks(left_blocks, right_blocks, mid, w_full)
+        return combined, None, blocks
 
     layout_preds = layout_pred([img])
     layout_blocks = (
@@ -208,12 +317,12 @@ def _ocr_page(
             # affiancato: divide a metà e processa ciascuna metà in modo indipendente.
             if img.size[0] > img.size[1] * 1.2:
                 mid = img.size[0] // 2
-                left_text,  _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
-                                           det_pred, rec_pred, layout_pred, forced_angle=0)
-                right_text, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
-                                           det_pred, rec_pred, layout_pred, forced_angle=0)
+                left_text,  _, _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
+                                              det_pred, rec_pred, layout_pred, forced_angle=0)
+                right_text, _, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
+                                              det_pred, rec_pred, layout_pred, forced_angle=0)
                 combined = "\n\n".join(t for t in (left_text, right_text) if t)
-                return combined, angle_applied
+                return combined, angle_applied, []
             layout_preds = layout_pred([img])
             layout_blocks = (
                 sorted(layout_preds[0].bboxes, key=lambda b: b.position)
@@ -245,12 +354,12 @@ def _ocr_page(
             # affiancato: divide a metà e processa ciascuna metà in modo indipendente.
             if img.size[0] > img.size[1] * 1.2:
                 mid = img.size[0] // 2
-                left_text,  _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
-                                           det_pred, rec_pred, layout_pred, forced_angle=0)
-                right_text, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
-                                           det_pred, rec_pred, layout_pred, forced_angle=0)
+                left_text,  _, _ = _ocr_page(img.crop((0, 0, mid, img.size[1])),
+                                              det_pred, rec_pred, layout_pred, forced_angle=0)
+                right_text, _, _ = _ocr_page(img.crop((mid, 0, img.size[0], img.size[1])),
+                                              det_pred, rec_pred, layout_pred, forced_angle=0)
                 combined = "\n\n".join(t for t in (left_text, right_text) if t)
-                return combined, angle_applied
+                return combined, angle_applied, []
             layout_preds = layout_pred([img])
             layout_blocks = (
                 sorted(layout_preds[0].bboxes, key=lambda b: b.position)
@@ -263,7 +372,7 @@ def _ocr_page(
     text_lines = [l for l in text_lines if not _is_noise_line(l.text)]
 
     if not text_lines:
-        return "", angle_applied
+        return "", angle_applied, []
 
     y_extents = [_poly_bbox(l.polygon)[3] - _poly_bbox(l.polygon)[1] for l in text_lines]
     avg_h = (sum(y_extents) / len(y_extents)) if y_extents else 20
@@ -297,7 +406,7 @@ def _ocr_page(
             right = [l for l in text_lines
                      if (_poly_bbox(l.polygon)[0] + _poly_bbox(l.polygon)[2]) / 2 >= W_img / 2]
             combined = "\n\n".join(t for t in (_page_text(left), _page_text(right)) if t)
-            return combined, angle_applied
+            return combined, angle_applied, []
 
     if not layout_blocks:
         text_lines.sort(key=sort_key)
@@ -308,7 +417,7 @@ def _ocr_page(
             gap = ly1_c - ly2_p
             sep = "\n\n" if gap > avg_h * 1.5 else "\n"
             parts.append(sep + text_lines[i].text)
-        return "".join(parts), angle_applied
+        return "".join(parts), angle_applied, []
 
     block_lines: dict = {i: [] for i in range(len(layout_blocks))}
     unassigned = []
@@ -325,8 +434,15 @@ def _ocr_page(
     parts = []
     prev_y2: Optional[float] = None
 
+    # I blocchi (schema Surya 0.20) si esportano solo sulle pagine NON ruotate:
+    # se qui è stata applicata una rotazione, i poligoni sono nello spazio
+    # raddrizzato e il writer del PDF li ruoterebbe di nuovo (doppia rotazione).
+    export_blocks = angle_applied is None
+    blocks: list = []
+
     for i in range(len(layout_blocks)):
         lines = sorted(block_lines[i], key=sort_key)
+        block_texts = []
         for line in lines:
             text = line.text.strip()
             if not text:
@@ -339,11 +455,22 @@ def _ocr_page(
             else:
                 parts.append(text)
             prev_y2 = ly2
+            block_texts.append(text)
+
+        if export_blocks and block_texts:
+            bbox = _norm_poly_bbox(layout_blocks[i].polygon, img.size)
+            if bbox is not None:
+                raw_label = getattr(layout_blocks[i], "label", "Text") or "Text"
+                blocks.append({
+                    "label": _LABEL_MAP.get(raw_label, "Text"),
+                    "html": html.escape("\n".join(block_texts)),
+                    "bbox": bbox,
+                })
 
     for line in sorted(unassigned, key=sort_key):
         parts.append("\n" + line.text.strip())
 
-    return "".join(parts), angle_applied
+    return "".join(parts), angle_applied, blocks
 
 
 # ---------------------------------------------------------------------------
@@ -405,9 +532,16 @@ def main():
 
         try:
             img = Image.open(path).convert("RGB")
-            text, angle = _ocr_page(img, det_pred, rec_pred, layout_pred,
-                                    forced_angle=forced_angle)
-            print(json.dumps({"type": "result", "text": text, "angle": angle}), flush=True)
+            text, angle, blocks = _ocr_page(img, det_pred, rec_pred, layout_pred,
+                                            forced_angle=forced_angle)
+            page_html = _page_html_from_blocks(blocks)
+            # Sulle pagine ruotate/splittate i blocks sono soppressi (vedi
+            # _ocr_page): senza fallback l'HTML di pagina resterebbe vuoto pur
+            # avendo il testo. Lo ricostruiamo dal flusso.
+            if not page_html.strip() and text.strip():
+                page_html = _page_html_from_text(text)
+            print(json.dumps({"type": "result", "text": text, "angle": angle,
+                              "html": page_html, "blocks": blocks}), flush=True)
         except Exception as e:
             print(json.dumps({"type": "error", "message": str(e)}), flush=True)
 

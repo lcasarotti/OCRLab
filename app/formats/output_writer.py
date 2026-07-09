@@ -652,7 +652,7 @@ def _rotate_bbox(bbox, rot: int):
 
 
 def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str,
-                         blocks=None, line_blocks=None) -> None:
+                         blocks=None, line_blocks=None, angles=None) -> None:
     """PDF ricercabile e **taggato**: immagine di sfondo + testo OCR leggibile.
 
     Struttura di ogni pagina:
@@ -730,7 +730,17 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str,
             # insieme, così l'output è dritto come l'originale e la lettura
             # riga-per-riga segue la topologia (parità coi PDF-scansione taggati).
             pix = src_page.get_pixmap(dpi=200)
-            rot = _detect_rotation(pix)
+            # Se l'OCR ha già raddrizzato la pagina (angolo fornito dall'engine, es.
+            # Surya 0.20 sugli spread ruotati), le sue bbox sono GIÀ dritte: usiamo
+            # quell'angolo per l'immagine e NON ri-ruotiamo le bbox (evita la doppia
+            # rotazione). Altrimenti autorileviamo via OSD e ruotiamo anche le bbox.
+            ocr_rot = angles[i] if angles and i < len(angles) else None
+            if ocr_rot:
+                rot = ocr_rot
+                rotate_bboxes = False
+            else:
+                rot = _detect_rotation(pix)
+                rotate_bboxes = True
             if rot:
                 pix = _rotate_pixmap(fitz, pix, rot)
 
@@ -756,7 +766,7 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str,
             has_boxes = bool(page_blocks) and any(b.get("bbox") for b in page_blocks)
             n_mcids = 0
             if has_boxes:
-                if rot:
+                if rot and rotate_bboxes:
                     page_blocks = [
                         {**b, "bbox": _rotate_bbox(b["bbox"], rot)} if b.get("bbox")
                         else b
@@ -781,7 +791,8 @@ def write_searchable_pdf(source_path: str, ocr_text: str, out_path: str,
 
 
 def write_file(text: str, path: str, source_path: str = "",
-               blocks=None, html: str = "", line_blocks=None) -> None:
+               blocks=None, html: str = "", line_blocks=None,
+               angles=None) -> None:
     """Salva il testo in base all'estensione del file.
 
     blocks:      list[list[dict]] semantici da Surya 0.20 (layout strutturato per
@@ -791,6 +802,10 @@ def write_file(text: str, path: str, source_path: str = "",
                  OCR. Servono solo al PDF ricercabile (topologia testo/immagine);
                  il DOCX li ignora e resta sul rendering a flusso, migliore per
                  blocchi privi di semantica.
+    angles:      list[int|None] per pagina: angolo ORARIO con cui l'OCR ha già
+                 raddrizzato la pagina (bbox dei blocchi già dritte). Il PDF
+                 ricercabile raddrizza l'immagine con questo angolo SENZA
+                 ri-ruotare le bbox. None su una pagina → il writer si autorileva.
     """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".docx":
@@ -803,7 +818,7 @@ def write_file(text: str, path: str, source_path: str = "",
                 "Per il PDF ricercabile è necessario il percorso del file sorgente."
             )
         write_searchable_pdf(source_path, text, path, blocks=blocks,
-                             line_blocks=line_blocks)
+                             line_blocks=line_blocks, angles=angles)
     elif ext == ".html":
         if not html:
             raise ValueError(
