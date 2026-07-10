@@ -2,12 +2,37 @@
 
 import abc
 import threading
+import time
 from typing import Callable
 
 import requests
 from google import genai
 
 from app.engine.chunker import TextChunker
+
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Riconosce gli errori di rate limit / quota esaurita dei provider cloud.
+
+    Gemini solleva eccezioni con status 429 / RESOURCE_EXHAUSTED, Ollama cloud
+    restituisce HTTP 429. Ci basiamo sia sul codice sia sul testo dell'errore
+    per coprire entrambe le librerie.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status == 429:
+        return True
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 429:
+        return True
+    msg = str(exc).lower()
+    return (
+        "429" in msg
+        or "rate limit" in msg
+        or "resource_exhausted" in msg
+        or "resource exhausted" in msg
+        or "quota" in msg
+        or "too many requests" in msg
+    )
 
 SYSTEM_PROMPT = (
     "Sei un correttore OCR. Il testo che ricevi è stato acquisito tramite OCR e contiene "
@@ -34,14 +59,29 @@ class LLMEngine(abc.ABC):
         on_progress: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
         on_chunk: Callable[[str], None] | None = None,
+        corrected_parts: list[str] | None = None,
+        on_retry: Callable[[int, int, float], None] | None = None,
+        on_checkpoint: Callable[[list[str], int], None] | None = None,
+        max_retries: int = 3,
+        retry_base_delay: float = 5.0,
     ) -> str:
-        """Corregge un documento intero con chunking.
+        """Corregge un documento intero con chunking, retry e ripresa.
 
         Args:
             full_text: testo completo da correggere.
             chunker: istanza di TextChunker.
             on_progress: callback(chunk_corrente, totale_chunk).
             cancel_event: evento di cancellazione; se set, interrompe l'elaborazione.
+            on_chunk: callback(testo_accumulato) per lo streaming.
+            corrected_parts: lista (mutabile) dei chunk gia' corretti. Se fornita,
+                la correzione RIPRENDE dal primo chunk non ancora presente e la
+                lista viene aggiornata in-place cosi' che il chiamante conservi i
+                progressi anche in caso di eccezione.
+            on_retry: callback(chunk_1based, tentativo, attesa_sec) sui rate limit.
+            on_checkpoint: callback(corrected_parts, totale) dopo ogni chunk
+                completato, per persistere lo stato su disco.
+            max_retries: numero massimo di ritentativi automatici sui rate limit.
+            retry_base_delay: attesa base (s) del backoff esponenziale.
 
         Returns:
             Testo corretto riassemblato.
@@ -51,19 +91,61 @@ class LLMEngine(abc.ABC):
         """
         chunks = chunker.split(full_text)
         total = len(chunks)
-        corrected_parts = []
+        if corrected_parts is None:
+            corrected_parts = []
 
-        for i, chunk in enumerate(chunks, 1):
+        # Ripresa: salta i chunk gia' corretti in un turno precedente.
+        start = min(len(corrected_parts), total)
+        if start and on_progress:
+            on_progress(start, total)
+        if start and on_chunk:
+            on_chunk("\n\n".join(corrected_parts))
+
+        for i in range(start, total):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("Correzione interrotta dall'utente.")
-            corrected = self.correct(chunk)
+            corrected = self._correct_with_retry(
+                chunks[i], i + 1, cancel_event, on_retry, max_retries, retry_base_delay
+            )
             corrected_parts.append(corrected)
+            if on_checkpoint:
+                on_checkpoint(corrected_parts, total)
             if on_chunk:
                 on_chunk("\n\n".join(corrected_parts))
             if on_progress:
-                on_progress(i, total)
+                on_progress(i + 1, total)
 
         return "\n\n".join(corrected_parts)
+
+    def _correct_with_retry(
+        self,
+        chunk: str,
+        chunk_num: int,
+        cancel_event: threading.Event | None,
+        on_retry: Callable[[int, int, float], None] | None,
+        max_retries: int,
+        base_delay: float,
+    ) -> str:
+        """Corregge un chunk ritentando con backoff sui soli errori di rate limit."""
+        attempt = 0
+        while True:
+            try:
+                return self.correct(chunk)
+            except Exception as exc:
+                if attempt >= max_retries or not is_rate_limit_error(exc):
+                    raise
+                attempt += 1
+                delay = base_delay * (2 ** (attempt - 1))
+                if on_retry:
+                    on_retry(chunk_num, attempt, delay)
+                # Attesa interrompibile: non blocchiamo la cancellazione.
+                waited = 0.0
+                while waited < delay:
+                    if cancel_event and cancel_event.is_set():
+                        raise InterruptedError("Correzione interrotta dall'utente.")
+                    step = min(0.5, delay - waited)
+                    time.sleep(step)
+                    waited += step
 
 
 OLLAMA_CLOUD_URL = "https://ollama.com"
