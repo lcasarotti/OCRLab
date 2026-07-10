@@ -86,6 +86,7 @@
   "Error: {error}": "Errore: {error}",
   "Open file to correct": "Apri file da correggere",
   "Text file (*.txt)|*.txt|Word document (*.docx)|*.docx": "File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx",
+  "Supported files|*.txt;*.docx;*.pdf;*.html;*.htm|Text file (*.txt)|*.txt|Word document (*.docx)|*.docx|PDF (*.pdf)|*.pdf|HTML (*.html;*.htm)|*.html;*.htm": "File supportati|*.txt;*.docx;*.pdf;*.html;*.htm|File di testo (*.txt)|*.txt|Documento Word (*.docx)|*.docx|PDF (*.pdf)|*.pdf|HTML (*.html;*.htm)|*.html;*.htm",
   "File loaded: {path}": "File caricato: {path}",
   "Error reading: {e}": "Errore nella lettura: {e}",
   "Please load a text file first.": "Carica prima un file di testo.",

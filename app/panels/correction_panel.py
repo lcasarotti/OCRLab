@@ -180,7 +180,13 @@ class CorrectionPanel(wx.Panel):
         dlg = wx.FileDialog(
             self,
             _("Open file to correct"),
-            wildcard=_("Text file (*.txt)|*.txt|Word document (*.docx)|*.docx"),
+            wildcard=_(
+                "Supported files|*.txt;*.docx;*.pdf;*.html;*.htm|"
+                "Text file (*.txt)|*.txt|"
+                "Word document (*.docx)|*.docx|"
+                "PDF (*.pdf)|*.pdf|"
+                "HTML (*.html;*.htm)|*.html;*.htm"
+            ),
             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
