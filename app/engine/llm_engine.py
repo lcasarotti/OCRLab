@@ -84,6 +84,11 @@ class OllamaEngine(LLMEngine):
         if self.cloud and self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        # Tetto di sicurezza per la generazione: l'output corretto ha circa la
+        # lunghezza dell'input, quindi limitiamo i token per evitare che un
+        # eventuale loop di ripetizione giri fino al timeout.
+        max_tokens = max(256, len(text_chunk) // 2 + 256)
+
         if self.cloud:
             # Cloud: usa endpoint OpenAI-compatible
             resp = requests.post(
@@ -96,6 +101,8 @@ class OllamaEngine(LLMEngine):
                         {"role": "user", "content": text_chunk},
                     ],
                     "stream": False,
+                    "temperature": 0.2,
+                    "max_tokens": max_tokens,
                 },
                 timeout=300,
             )
@@ -103,18 +110,38 @@ class OllamaEngine(LLMEngine):
             data = resp.json()
             return data["choices"][0]["message"]["content"].strip()
         else:
-            # Locale: usa /api/generate con prompt diretto
+            # Locale: usa /api/generate con prompt diretto.
+            # think=False disattiva il "thinking mode" dei modelli reasoner
+            # (es. Gemma 4): senza, il modello ragiona all'infinito e non
+            # emette mai il testo finale entro il timeout.
+            payload = {
+                "model": self.model,
+                "system": SYSTEM_PROMPT,
+                "prompt": text_chunk,
+                "stream": False,
+                "think": False,
+                "options": {
+                    "temperature": 0.2,
+                    "repeat_penalty": 1.2,
+                    "num_predict": max_tokens,
+                },
+            }
             resp = requests.post(
                 f"{self.url}/api/generate",
                 headers=headers,
-                json={
-                    "model": self.model,
-                    "system": SYSTEM_PROMPT,
-                    "prompt": text_chunk,
-                    "stream": False,
-                },
+                json=payload,
                 timeout=300,
             )
+            # I modelli senza thinking possono rifiutare il campo think:
+            # in quel caso ripetiamo la richiesta senza di esso.
+            if resp.status_code == 400 and "think" in resp.text.lower():
+                payload.pop("think", None)
+                resp = requests.post(
+                    f"{self.url}/api/generate",
+                    headers=headers,
+                    json=payload,
+                    timeout=300,
+                )
             resp.raise_for_status()
             return resp.json().get("response", "").strip()
 
