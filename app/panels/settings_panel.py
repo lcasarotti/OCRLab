@@ -18,14 +18,14 @@ _IS_WINDOWS = sys.platform == "win32"
 _IS_MACOS = sys.platform == "darwin"
 
 _OCR_ENGINE_KEYS = (
-    ["tesseract", "vlm"]
+    ["tesseract", "vlm", "unsloth_vlm"]
     + (["windows"] if _IS_WINDOWS else [])
     + (["apple_vision"] if _IS_MACOS else [])
     + ["surya", "surya20"]
     + (["chandra"] if ENABLE_CHANDRA else [])
 )
 _OCR_ENGINE_LABELS = (
-    ["Tesseract", "Ollama Vision"]
+    ["Tesseract", "Ollama Vision", "Unsloth Vision"]
     + (["Windows OCR"] if _IS_WINDOWS else [])
     + (["Apple Vision (macOS)"] if _IS_MACOS else [])
     + ["Surya 0.1", "Surya 0.2 (requires Docker / llama.cpp)"]
@@ -39,6 +39,10 @@ GEMINI_MODELS = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
 ]
+
+# Ordine delle voci del RadioBox di scelta provider LLM.
+_LLM_PROVIDERS = ["ollama", "unsloth", "gemini"]
+_PROVIDER_TO_IDX = {p: i for i, p in enumerate(_LLM_PROVIDERS)}
 
 
 class SettingsPanel(wx.Panel):
@@ -67,7 +71,7 @@ class SettingsPanel(wx.Panel):
         self._ocr_sizer = wx.StaticBoxSizer(self._ocr_box, wx.VERTICAL)
 
         _ocr_labels = (
-            ["Tesseract", "Ollama Vision"]
+            ["Tesseract", "Ollama Vision", _("Unsloth Vision")]
             + (["Windows OCR"] if _IS_WINDOWS else [])
             + (["Apple Vision (macOS)"] if _IS_MACOS else [])
             + ["Surya 0.1", _("Surya 0.2 (requires Docker / llama.cpp)")]
@@ -132,6 +136,26 @@ class SettingsPanel(wx.Panel):
         self.txt_vlm_api_key = wx.TextCtrl(self, size=(300, -1), style=wx.TE_PASSWORD)
         row_vlm_api.Add(self.txt_vlm_api_key, 1, wx.EXPAND)
         self._ocr_sizer.Add(row_vlm_api, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        # Unsloth Vision (usa URL e API key impostati nella sezione Correzione)
+        self.row_unsloth_vlm = wx.BoxSizer(wx.HORIZONTAL)
+        self.lbl_unsloth_vlm_model = wx.StaticText(self, label=_("Unsloth vision model:"))
+        self.row_unsloth_vlm.Add(self.lbl_unsloth_vlm_model, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.cmb_unsloth_vlm_model = wx.ComboBox(self, choices=[], style=wx.CB_DROPDOWN, size=(300, -1))
+        self.row_unsloth_vlm.Add(self.cmb_unsloth_vlm_model, 1, wx.EXPAND)
+        self._ocr_sizer.Add(self.row_unsloth_vlm, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.row_unsloth_vlm_btns = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_unsloth_vlm_models = wx.Button(self, label=_("Available models"))
+        self.row_unsloth_vlm_btns.Add(self.btn_unsloth_vlm_models, 0)
+        self._ocr_sizer.Add(self.row_unsloth_vlm_btns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
+
+        self.lbl_unsloth_vlm_note = wx.StaticText(
+            self,
+            label=_("Uses the Unsloth Studio URL and API key set in the Correction section.\n"
+                    "Load a vision-capable model in Unsloth Studio before running OCR."),
+        )
+        self._ocr_sizer.Add(self.lbl_unsloth_vlm_note, 0, wx.LEFT | wx.BOTTOM, 5)
 
         self.row_winocr = wx.BoxSizer(wx.HORIZONTAL)
         self.lbl_winocr_lang = wx.StaticText(self, label=_("Windows OCR language:"))
@@ -266,8 +290,12 @@ class SettingsPanel(wx.Panel):
         self.rb_provider = wx.RadioBox(
             self,
             label=_("Engine"),
-            choices=[_("Ollama (local or cloud)"), _("Gemini (cloud)")],
-            majorDimension=2,
+            choices=[
+                _("Ollama (local or cloud)"),
+                _("Unsloth Studio (local)"),
+                _("Gemini (cloud)"),
+            ],
+            majorDimension=3,
             style=wx.RA_SPECIFY_COLS,
         )
         self._llm_sizer.Add(self.rb_provider, 0, wx.EXPAND | wx.ALL, 5)
@@ -312,6 +340,51 @@ class SettingsPanel(wx.Panel):
 
         ollama_panel.SetSizer(ol_sizer)
         self._llm_sizer.Add(ollama_panel, 0, wx.EXPAND | wx.LEFT, 10)
+
+        # Unsloth Studio (server locale OpenAI-compatible)
+        self.unsloth_panel = wx.Panel(self)
+        unsloth_panel = self.unsloth_panel
+        un_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        row_un_url = wx.BoxSizer(wx.HORIZONTAL)
+        row_un_url.Add(wx.StaticText(unsloth_panel, label=_("Unsloth Studio URL:")), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.txt_unsloth_url = wx.TextCtrl(unsloth_panel, size=(300, -1))
+        row_un_url.Add(self.txt_unsloth_url, 1, wx.EXPAND)
+        un_sizer.Add(row_un_url, 0, wx.EXPAND | wx.ALL, 3)
+
+        row_un_model = wx.BoxSizer(wx.HORIZONTAL)
+        row_un_model.Add(wx.StaticText(unsloth_panel, label=_("Unsloth model:")), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.cmb_unsloth_model = wx.ComboBox(unsloth_panel, choices=[], style=wx.CB_DROPDOWN)
+        row_un_model.Add(self.cmb_unsloth_model, 1, wx.EXPAND)
+        un_sizer.Add(row_un_model, 0, wx.EXPAND | wx.ALL, 3)
+
+        row_un_btn = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_refresh_unsloth = wx.Button(unsloth_panel, label=_("Available models"))
+        row_un_btn.Add(self.btn_refresh_unsloth, 0)
+        un_sizer.Add(row_un_btn, 0, wx.EXPAND | wx.ALL, 3)
+
+        row_un_key = wx.BoxSizer(wx.HORIZONTAL)
+        row_un_key.Add(wx.StaticText(unsloth_panel, label=_("Unsloth API key:")), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.txt_unsloth_api_key = wx.TextCtrl(unsloth_panel, size=(300, -1), style=wx.TE_PASSWORD)
+        row_un_key.Add(self.txt_unsloth_api_key, 1, wx.EXPAND)
+        un_sizer.Add(row_un_key, 0, wx.EXPAND | wx.ALL, 3)
+
+        self.chk_unsloth_reasoning = wx.CheckBox(
+            unsloth_panel, label=_("Enable reasoning (thinking mode)"))
+        self.chk_unsloth_reasoning.SetToolTip(
+            _("Let reasoner models think before answering. Slower; may loop on "
+              "long chunks. Off by default."))
+        un_sizer.Add(self.chk_unsloth_reasoning, 0, wx.ALL, 3)
+
+        self.chk_unsloth_web_search = wx.CheckBox(
+            unsloth_panel, label=_("Enable web search"))
+        self.chk_unsloth_web_search.SetToolTip(
+            _("Allow the model to use the web_search tool during correction. "
+              "Requires a tool-capable model loaded in Unsloth Studio."))
+        un_sizer.Add(self.chk_unsloth_web_search, 0, wx.ALL, 3)
+
+        unsloth_panel.SetSizer(un_sizer)
+        self._llm_sizer.Add(unsloth_panel, 0, wx.EXPAND | wx.LEFT, 10)
 
         # Gemini
         self.gemini_panel = wx.Panel(self)
@@ -378,6 +451,7 @@ class SettingsPanel(wx.Panel):
         self.btn_library_ollama.Bind(wx.EVT_BUTTON, self._on_library_ollama)
         self.btn_remote_ollama.Bind(wx.EVT_BUTTON, self._on_remote_ollama)
         self.btn_refresh_gemini.Bind(wx.EVT_BUTTON, self._on_refresh_gemini)
+        self.btn_refresh_unsloth.Bind(wx.EVT_BUTTON, self._on_refresh_unsloth)
         self.btn_save.Bind(wx.EVT_BUTTON, self._on_save)
         self.chk_vlm_cloud.Bind(wx.EVT_CHECKBOX, self._on_vlm_cloud_toggled)
         self.chk_ollama_cloud.Bind(wx.EVT_CHECKBOX, self._on_ollama_cloud_toggled)
@@ -388,6 +462,7 @@ class SettingsPanel(wx.Panel):
         self.btn_vlm_local.Bind(wx.EVT_BUTTON, self._on_vlm_local)
         self.btn_vlm_library.Bind(wx.EVT_BUTTON, self._on_vlm_library)
         self.btn_vlm_cloud.Bind(wx.EVT_BUTTON, self._on_vlm_cloud)
+        self.btn_unsloth_vlm_models.Bind(wx.EVT_BUTTON, self._on_refresh_unsloth_vlm)
         self.rb_provider.Bind(wx.EVT_RADIOBOX, self._on_provider_changed)
         self.rb_settings_section.Bind(wx.EVT_RADIOBOX, lambda _: self._update_section_visibility())
 
@@ -395,9 +470,10 @@ class SettingsPanel(wx.Panel):
         self._update_provider_visibility()
 
     def _update_provider_visibility(self):
-        is_ollama = self.rb_provider.GetSelection() == 0
-        self.ollama_panel.Show(is_ollama)
-        self.gemini_panel.Show(not is_ollama)
+        provider = _LLM_PROVIDERS[self.rb_provider.GetSelection()]
+        self.ollama_panel.Show(provider == "ollama")
+        self.unsloth_panel.Show(provider == "unsloth")
+        self.gemini_panel.Show(provider == "gemini")
         self.Layout()
 
     def _update_section_visibility(self):
@@ -418,6 +494,7 @@ class SettingsPanel(wx.Panel):
         sel = self.rb_ocr_engine.GetSelection()
         is_tesseract = sel == _ENGINE_TO_IDX.get("tesseract", -1)
         is_vlm = sel == _ENGINE_TO_IDX.get("vlm", -1)
+        is_unsloth_vlm = sel == _ENGINE_TO_IDX.get("unsloth_vlm", -1)
         is_windows = sel == _ENGINE_TO_IDX.get("windows", -1)
         is_apple_vision = sel == _ENGINE_TO_IDX.get("apple_vision", -1)
         is_surya = sel == _ENGINE_TO_IDX.get("surya", -1)
@@ -440,6 +517,10 @@ class SettingsPanel(wx.Panel):
         self.chk_vlm_cloud.Show(is_vlm)
         self.lbl_vlm_api_key.Show(is_vlm)
         self.txt_vlm_api_key.Show(is_vlm)
+        self.lbl_unsloth_vlm_model.Show(is_unsloth_vlm)
+        self.cmb_unsloth_vlm_model.Show(is_unsloth_vlm)
+        self.btn_unsloth_vlm_models.Show(is_unsloth_vlm)
+        self.lbl_unsloth_vlm_note.Show(is_unsloth_vlm)
         self.lbl_winocr_lang.Show(is_windows)
         self.cmb_winocr_lang.Show(is_windows)
         self.btn_refresh_winocr.Show(is_windows)
@@ -630,7 +711,7 @@ class SettingsPanel(wx.Panel):
         self._winocr_lang_tags = []
         threading.Thread(target=self._load_winocr_langs_bg, daemon=True).start()
         provider = self.config.get("llm_provider", "ollama")
-        self.rb_provider.SetSelection(0 if provider == "ollama" else 1)
+        self.rb_provider.SetSelection(_PROVIDER_TO_IDX.get(provider, 0))
 
         self.txt_ollama_url.SetValue(self.config.get("ollama_url", "http://localhost:11434"))
         self.cmb_ollama_model.SetValue(self.config.get("ollama_model", ""))
@@ -638,6 +719,12 @@ class SettingsPanel(wx.Panel):
         self.txt_ollama_api_key.SetValue(self.config.get("ollama_api_key", ""))
         self.chk_vlm_cloud.SetValue(self.config.get("ollama_cloud", False))
         self.txt_vlm_api_key.SetValue(self.config.get("ollama_api_key", ""))
+        self.txt_unsloth_url.SetValue(self.config.get("unsloth_url", "http://127.0.0.1:8888"))
+        self.cmb_unsloth_model.SetValue(self.config.get("unsloth_model", ""))
+        self.txt_unsloth_api_key.SetValue(self.config.get("unsloth_api_key", ""))
+        self.cmb_unsloth_vlm_model.SetValue(self.config.get("unsloth_vlm_model", ""))
+        self.chk_unsloth_reasoning.SetValue(self.config.get("unsloth_reasoning", False))
+        self.chk_unsloth_web_search.SetValue(self.config.get("unsloth_web_search", False))
         self.txt_gemini_key.SetValue(self.config.get("gemini_api_key", ""))
         self.cmb_gemini_model.SetValue(self.config.get("gemini_model", "gemini-2.0-flash"))
 
@@ -880,6 +967,47 @@ class SettingsPanel(wx.Panel):
         self._speak(msg)
         self.cmb_ollama_model.SetFocus()
 
+    def _on_refresh_unsloth(self, _event):
+        self._load_unsloth_models(self.cmb_unsloth_model)
+
+    def _on_refresh_unsloth_vlm(self, _event):
+        self._load_unsloth_models(self.cmb_unsloth_vlm_model)
+
+    def _load_unsloth_models(self, target_combo):
+        """Carica in background la lista modelli da /v1/models di Unsloth Studio.
+
+        URL e API key sono sempre quelli della sezione Correzione (unica fonte),
+        cosi' il motore vision non duplica i campi.
+        """
+        url = self.txt_unsloth_url.GetValue().rstrip("/")
+        api_key = self.txt_unsloth_api_key.GetValue().strip()
+        self.main_frame.set_status(_("Loading Unsloth models..."))
+        self._speak(_("Loading Unsloth models."))
+
+        def _fetch():
+            try:
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                resp = requests.get(f"{url}/v1/models", headers=headers, timeout=10)
+                resp.raise_for_status()
+                data = resp.json().get("data", [])
+                models = [m["id"] for m in data if isinstance(m, dict) and m.get("id")]
+                wx.CallAfter(self._update_unsloth_models, target_combo, models)
+            except Exception as e:
+                wx.CallAfter(wx.MessageBox, _("Unsloth connection error: {e}").format(e=e), _("Error"), wx.OK | wx.ICON_ERROR)
+                wx.CallAfter(self.main_frame.set_status, _("Unsloth connection error."))
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _update_unsloth_models(self, target_combo, models):
+        target_combo.Set(models)
+        if models:
+            target_combo.SetValue(models[0])
+        n = len(models)
+        msg = _("Found {n} Unsloth models.").format(n=n)
+        self.main_frame.set_status(msg)
+        self._speak(msg)
+        target_combo.SetFocus()
+
     def _on_library_ollama(self, _event):
         self.main_frame.set_status(_("Loading downloadable Ollama models..."))
         self._speak(_("Loading downloadable Ollama models."))
@@ -999,12 +1127,18 @@ class SettingsPanel(wx.Panel):
                 self.chk_apple_vision_lang_correction.IsChecked()
             )
         self.config["windows_ocr_lang"] = self._get_winocr_tag()
-        self.config["llm_provider"] = "ollama" if self.rb_provider.GetSelection() == 0 else "gemini"
+        self.config["llm_provider"] = _LLM_PROVIDERS[self.rb_provider.GetSelection()]
         self.config["ollama_url"] = self.txt_ollama_url.GetValue()
         raw_ollama = self.cmb_ollama_model.GetValue()
         self.config["ollama_model"] = self._clean_model_name(raw_ollama)
         self.config["ollama_cloud"] = self.chk_ollama_cloud.IsChecked()
         self.config["ollama_api_key"] = self.txt_ollama_api_key.GetValue()
+        self.config["unsloth_url"] = self.txt_unsloth_url.GetValue()
+        self.config["unsloth_model"] = self._clean_model_name(self.cmb_unsloth_model.GetValue())
+        self.config["unsloth_api_key"] = self.txt_unsloth_api_key.GetValue()
+        self.config["unsloth_vlm_model"] = self._clean_model_name(self.cmb_unsloth_vlm_model.GetValue())
+        self.config["unsloth_reasoning"] = self.chk_unsloth_reasoning.IsChecked()
+        self.config["unsloth_web_search"] = self.chk_unsloth_web_search.IsChecked()
         self.config["gemini_api_key"] = self.txt_gemini_key.GetValue()
         self.config["gemini_model"] = self.cmb_gemini_model.GetValue()
         self.config["chunk_size"] = self.spin_chunk_size.GetValue()
@@ -1030,11 +1164,17 @@ class SettingsPanel(wx.Panel):
                 self.chk_apple_vision_lang_correction.IsChecked() if _IS_MACOS else False
             ),
             "windows_ocr_lang": self._get_winocr_tag(),
-            "llm_provider": "ollama" if self.rb_provider.GetSelection() == 0 else "gemini",
+            "llm_provider": _LLM_PROVIDERS[self.rb_provider.GetSelection()],
             "ollama_url": self.txt_ollama_url.GetValue(),
             "ollama_model": self._clean_model_name(raw_model),
             "ollama_cloud": self.chk_ollama_cloud.IsChecked(),
             "ollama_api_key": self.txt_ollama_api_key.GetValue(),
+            "unsloth_url": self.txt_unsloth_url.GetValue(),
+            "unsloth_model": self._clean_model_name(self.cmb_unsloth_model.GetValue()),
+            "unsloth_api_key": self.txt_unsloth_api_key.GetValue(),
+            "unsloth_vlm_model": self._clean_model_name(self.cmb_unsloth_vlm_model.GetValue()),
+            "unsloth_reasoning": self.chk_unsloth_reasoning.IsChecked(),
+            "unsloth_web_search": self.chk_unsloth_web_search.IsChecked(),
             "gemini_api_key": self.txt_gemini_key.GetValue(),
             "gemini_model": self.cmb_gemini_model.GetValue(),
             "chunk_size": self.spin_chunk_size.GetValue(),

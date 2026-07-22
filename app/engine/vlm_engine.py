@@ -136,3 +136,51 @@ class VLMEngine:
             )
             resp.raise_for_status()
             return resp.json().get("response", "").strip()
+
+
+class UnslothVLMEngine(VLMEngine):
+    """Motore OCR vision che usa Unsloth Studio (server locale OpenAI-compatible).
+
+    Riusa tutta la pipeline di VLMEngine (process/PDF/immagine) e cambia solo la
+    chiamata al modello: endpoint /v1/chat/completions con Bearer, come il ramo
+    cloud di Ollama ma puntando al server locale su 127.0.0.1:8888.
+    """
+
+    def __init__(self, url: str = "http://127.0.0.1:8888", model: str = "",
+                 api_key: str = ""):
+        self.url = url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.cloud = False  # non e' Ollama cloud: auth sempre via Bearer locale
+
+    def _call_vlm(self, image_b64: str) -> str:
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        resp = requests.post(
+            f"{self.url}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": VLM_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_b64}",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "stream": False,
+                "enable_thinking": False,
+            },
+            timeout=300,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()

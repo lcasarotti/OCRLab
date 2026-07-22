@@ -6,7 +6,7 @@ import threading
 import wx
 
 from app.engine.ocr_engine import OCREngine
-from app.engine.vlm_engine import VLMEngine
+from app.engine.vlm_engine import VLMEngine, UnslothVLMEngine
 from app.engine.windows_ocr_engine import WindowsOCREngine
 from app.engine.apple_vision_engine import AppleVisionEngine
 from app.engine.surya_engine import SuryaEngine
@@ -144,6 +144,14 @@ class OCRPanel(wx.Panel):
                         model=config.get("vlm_model", ""),
                         api_key=config.get("ollama_api_key", ""),
                         cloud=config.get("ollama_cloud", False),
+                    )
+                    result = engine.process(file_path, on_progress=on_progress,
+                                            cancel_event=cancel, on_partial=on_partial)
+                elif ocr_engine == "unsloth_vlm":
+                    engine = UnslothVLMEngine(
+                        url=config.get("unsloth_url", "http://127.0.0.1:8888"),
+                        model=config.get("unsloth_vlm_model", ""),
+                        api_key=config.get("unsloth_api_key", ""),
                     )
                     result = engine.process(file_path, on_progress=on_progress,
                                             cancel_event=cancel, on_partial=on_partial)

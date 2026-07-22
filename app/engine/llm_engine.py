@@ -1,6 +1,7 @@
 """Motori LLM per la correzione del testo OCR."""
 
 import abc
+import re
 import threading
 import time
 from typing import Callable
@@ -228,6 +229,68 @@ class OllamaEngine(LLMEngine):
             return resp.json().get("response", "").strip()
 
 
+class UnslothEngine(LLMEngine):
+    """Motore LLM che usa Unsloth Studio (server locale OpenAI-compatible).
+
+    Unsloth Studio espone un backend FastAPI su http://127.0.0.1:8888 con
+    endpoint OpenAI-compatible (/v1/chat/completions) protetto da Bearer token
+    (chiavi nella forma ``sk-unsloth-...`` create dall'interfaccia di Studio).
+    """
+
+    def __init__(self, url: str = "http://127.0.0.1:8888", model: str = "",
+                 api_key: str = "", reasoning: bool = False,
+                 web_search: bool = False):
+        self.url = url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.reasoning = reasoning
+        self.web_search = web_search
+
+    def correct(self, text_chunk: str) -> str:
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Tetto di sicurezza per la generazione: l'output corretto ha circa la
+        # lunghezza dell'input, quindi limitiamo i token per evitare che un
+        # eventuale loop di ripetizione giri fino al timeout.
+        max_tokens = max(256, len(text_chunk) // 2 + 256)
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": text_chunk},
+            ],
+            "stream": False,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+            # Con reasoning OFF il modello non "pensa": evita che i modelli
+            # reasoner girino a lungo senza emettere il testo entro il timeout
+            # (analogo a think=False di Ollama). Attivabile per sperimentare.
+            "enable_thinking": self.reasoning,
+        }
+        if self.web_search:
+            payload["enable_tools"] = True
+            payload["enabled_tools"] = ["web_search"]
+        resp = requests.post(
+            f"{self.url}/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=300,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        # Con reasoning attivo alcuni modelli inglobano il ragionamento in
+        # blocchi <think>...</think> dentro il contenuto: li rimuoviamo perche'
+        # il testo corretto non deve contenerli.
+        if self.reasoning and "<think>" in content:
+            content = re.sub(r"<think>.*?</think>", "", content,
+                             flags=re.DOTALL).strip()
+        return content
+
+
 class GeminiEngine(LLMEngine):
     """Motore LLM che usa Google Gemini."""
 
@@ -253,6 +316,14 @@ def create_engine(config: dict) -> LLMEngine:
         return GeminiEngine(
             api_key=config.get("gemini_api_key", ""),
             model=config.get("gemini_model", "gemini-2.0-flash"),
+        )
+    elif provider == "unsloth":
+        return UnslothEngine(
+            url=config.get("unsloth_url", "http://127.0.0.1:8888"),
+            model=config.get("unsloth_model", ""),
+            api_key=config.get("unsloth_api_key", ""),
+            reasoning=config.get("unsloth_reasoning", False),
+            web_search=config.get("unsloth_web_search", False),
         )
     else:
         return OllamaEngine(
