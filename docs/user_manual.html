@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCRLab — Manuale / Manual</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #555;
+    --accent: #0b5fff;
+    --accent-fg: #ffffff;
+    --border: #d0d0d0;
+    --code-bg: #f4f4f6;
+    --note-bg: #eef4ff;
+    --note-border: #0b5fff;
+    --warn-bg: #fff6e6;
+    --warn-border: #d98200;
+    --maxw: 52rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --fg: #e8e8ea;
+      --muted: #a8a8b0;
+      --accent: #5b8dff;
+      --accent-fg: #10121a;
+      --border: #33363d;
+      --code-bg: #23262d;
+      --note-bg: #1a2333;
+      --note-border: #5b8dff;
+      --warn-bg: #2c2415;
+      --warn-border: #d98200;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 1.05rem;
+    line-height: 1.6;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 1.5rem 1.25rem 5rem; }
+  a { color: var(--accent); }
+  a:focus, button:focus, summary:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .skip {
+    position: absolute; left: -9999px; top: 0;
+    background: var(--accent); color: var(--accent-fg);
+    padding: .6rem 1rem; z-index: 10; border-radius: 0 0 6px 0;
+  }
+  .skip:focus { left: 0; }
+  header.top {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1rem; margin-bottom: 1.5rem;
+  }
+  .langbar { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .langbar button {
+    font: inherit; cursor: pointer;
+    background: var(--code-bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: .4rem 1.1rem;
+  }
+  .langbar button[aria-pressed="true"] {
+    background: var(--accent); color: var(--accent-fg); border-color: var(--accent);
+    font-weight: 600;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: .2rem 0; }
+  h2 {
+    font-size: 1.4rem; margin-top: 2.5rem; padding-top: .5rem;
+    border-top: 1px solid var(--border);
+  }
+  h3 { font-size: 1.15rem; margin-top: 1.6rem; }
+  .sub { color: var(--muted); margin-top: .2rem; }
+  code, kbd {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: .05em .4em; font-size: .9em;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  kbd { font-weight: 600; white-space: nowrap; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: .9rem 1rem; overflow-x: auto;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--border); padding: .55rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  .note, .warn {
+    border-left: 4px solid var(--note-border); background: var(--note-bg);
+    padding: .8rem 1rem; border-radius: 0 8px 8px 0; margin: 1.1rem 0;
+  }
+  .warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+  .note p:first-child, .warn p:first-child { margin-top: 0; }
+  .note p:last-child, .warn p:last-child { margin-bottom: 0; }
+  nav.toc {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem;
+  }
+  nav.toc ol { margin: .3rem 0 0; padding-left: 1.3rem; }
+  nav.toc li { margin: .25rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: .3rem 0; }
+  dt { font-weight: 600; margin-top: .7rem; }
+  dd { margin: 0 0 .3rem 0; color: var(--fg); }
+  .lang-en { display: none; }
+  html[data-lang="en"] .lang-it { display: none; }
+  html[data-lang="en"] .lang-en { display: block; }
+  html[data-lang="en"] li.lang-it, html[data-lang="en"] span.lang-it { display: none; }
+  html[data-lang="en"] li.lang-en, html[data-lang="en"] span.lang-en { display: list-item; }
+  span.lang-en { display: none; }
+  html[data-lang="en"] span.lang-en { display: inline; }
+  html[data-lang="it"] span.lang-it { display: inline; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main" data-it="Salta al contenuto" data-en="Skip to content">Salta al contenuto</a>
+<div class="wrap">
+
+<header class="top">
+  <div class="langbar" role="group" aria-label="Lingua / Language">
+    <button type="button" id="btn-it" aria-pressed="true" onclick="setLang('it')">Italiano</button>
+    <button type="button" id="btn-en" aria-pressed="false" onclick="setLang('en')">English</button>
+  </div>
+  <h1>OCRLab</h1>
+  <p class="sub">
+    <span class="lang-it">Manuale utente — versione applicazione 0.2.2</span>
+    <span class="lang-en">User manual — application version 0.2.2</span>
+  </p>
+</header>
+
+<main id="main">
+
+<!-- ===================== ITALIANO ===================== -->
+<div class="lang-it" lang="it">
+
+  <nav class="toc" aria-label="Indice">
+    <strong>Indice</strong>
+    <ol>
+      <li><a href="#it-intro">Che cos'è OCRLab</a></li>
+      <li><a href="#it-start">Avvio e struttura dell'interfaccia</a></li>
+      <li><a href="#it-acq">Scheda Acquisizione (OCR)</a></li>
+      <li><a href="#it-corr">Scheda Correzione (LLM)</a></li>
+      <li><a href="#it-set">Scheda Impostazioni</a></li>
+      <li><a href="#it-engines">I motori OCR in dettaglio</a></li>
+      <li><a href="#it-llm">I motori di correzione LLM</a></li>
+      <li><a href="#it-menu">Menu, scorciatoie e accessibilità</a></li>
+      <li><a href="#it-install">Installare motori aggiuntivi</a></li>
+      <li><a href="#it-faq">Risoluzione dei problemi</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="it-intro">1. Che cos'è OCRLab</h2>
+  <p>OCRLab è un'applicazione desktop per <strong>acquisire testo da immagini e PDF tramite OCR</strong> e per <strong>correggere il testo con un modello linguistico (LLM)</strong>. È multipiattaforma (Windows e macOS) e progettata per essere <strong>completamente accessibile con screen reader</strong> (NVDA, VoiceOver) e sintesi vocale.</p>
+  <p>Supporta più motori OCR — Tesseract, Surya, Windows OCR, Apple Vision, modelli vision di Ollama/Unsloth e Chandra — e più provider di correzione (Ollama, Unsloth Studio, Google Gemini). Puoi scegliere il motore più adatto al tipo di documento e alla lingua.</p>
+
+  <h2 id="it-start">2. Avvio e struttura dell'interfaccia</h2>
+  <p>La finestra principale è organizzata in <strong>tre schede</strong>, selezionabili con <kbd>Alt+1</kbd>, <kbd>Alt+2</kbd>, <kbd>Alt+3</kbd> o con le frecce sulla barra delle schede:</p>
+  <ol>
+    <li><strong>Acquisizione</strong> — esegui l'OCR di un'immagine o di un PDF.</li>
+    <li><strong>Correzione</strong> — correggi un testo (anche il risultato dell'OCR) con un LLM.</li>
+    <li><strong>Impostazioni</strong> — scegli e configura i motori OCR e LLM.</li>
+  </ol>
+  <p>In basso una <strong>barra di stato</strong> mostra l'operazione corrente. La prima volta configura almeno un motore nella scheda Impostazioni e premi <strong>Salva impostazioni</strong>.</p>
+  <div class="note"><p><strong>Consiglio.</strong> Il flusso tipico è: <em>Acquisizione</em> → salvi il testo, oppure passi direttamente alla <em>Correzione</em> per rifinirlo con l'LLM.</p></div>
+
+  <h2 id="it-acq">3. Scheda Acquisizione (OCR)</h2>
+  <p>Serve a estrarre testo da un file immagine o PDF.</p>
+  <ol>
+    <li>Premi <strong>Apri file</strong> (<kbd>Ctrl+O</kbd>) e seleziona un file <code>.jpg</code>, <code>.jpeg</code>, <code>.png</code> o <code>.pdf</code>.</li>
+    <li>Premi <strong>Avvia OCR</strong> (<kbd>F5</kbd>). Una barra di avanzamento e l'etichetta "Pagina X di Y" indicano il progresso.</li>
+    <li>Per fermare l'elaborazione premi <strong>Interrompi</strong> (<kbd>Esc</kbd>).</li>
+    <li>Il testo compare nel riquadro <strong>Risultato OCR</strong>.</li>
+    <li>Premi <strong>Salva risultato</strong> (<kbd>Ctrl+S</kbd>) per esportarlo.</li>
+  </ol>
+  <h3>Formati di salvataggio</h3>
+  <ul>
+    <li><strong>Testo</strong> (<code>.txt</code>)</li>
+    <li><strong>Documento Word</strong> (<code>.docx</code>)</li>
+    <li><strong>PDF ricercabile</strong> (<code>.pdf</code>) — l'immagine originale con sopra il testo selezionabile e taggato per l'accessibilità.</li>
+    <li><strong>HTML</strong> (<code>.html</code>) — disponibile solo quando il motore produce formattazione (es. Surya).</li>
+  </ul>
+  <p>Le pagine multiple sono separate internamente da un carattere di avanzamento pagina.</p>
+
+  <h2 id="it-corr">4. Scheda Correzione (LLM)</h2>
+  <p>Serve a correggere errori di OCR, refusi e formattazione usando un modello linguistico.</p>
+  <ol>
+    <li>Premi <strong>Apri file</strong> e carica un file <code>.txt</code>, <code>.docx</code>, <code>.pdf</code> o <code>.html</code>. Il testo appare in <strong>Testo originale</strong>.</li>
+    <li>Premi <strong>Avvia correzione</strong> (<kbd>F5</kbd>). Il testo viene diviso in <em>chunk</em> ed elaborato in sequenza; l'avanzamento mostra "Chunk X di Y".</li>
+    <li>Il risultato compare in <strong>Testo corretto</strong>; salvalo con <strong>Salva risultato</strong> in <code>.txt</code> o <code>.docx</code>.</li>
+  </ol>
+  <h3>Ripresa dopo un'interruzione</h3>
+  <p>Se la correzione si interrompe (per esempio per un <em>rate limit</em> del servizio cloud o un errore di rete), OCRLab salva i chunk già corretti in un file di stato accanto al documento (<code>.ocrlab-resume.json</code>). Riaprendo lo stesso file compare "Ripresa disponibile: N di M chunk già corretti" e il pulsante <strong>Riprendi correzione</strong> continua dal punto d'interruzione. In caso di rate limit l'app riprova automaticamente con attese progressive.</p>
+  <div class="note"><p><strong>Chunk e overlap.</strong> Dimensione dei chunk e sovrapposizione (overlap) si regolano nella scheda Impostazioni → sezione Chunking. Chunk più piccoli sono più robusti ma più lenti.</p></div>
+
+  <h2 id="it-set">5. Scheda Impostazioni</h2>
+  <p>In alto scegli quale sezione visualizzare con il selettore <strong>Mostra impostazioni</strong>: <strong>Acquisizione</strong> (motori OCR) o <strong>Correzione</strong> (motori LLM e chunking). Ricorda di premere <strong>Salva impostazioni</strong> in fondo.</p>
+  <h3>Sezione Acquisizione</h3>
+  <ul>
+    <li><strong>Motore OCR</strong> — scegli il motore (vedi capitolo 6). I campi visibili cambiano in base alla scelta.</li>
+    <li><strong>Path Tesseract</strong> e <strong>Lingua predefinita OCR</strong> per Tesseract.</li>
+    <li><strong>Modello VLM</strong> e pulsanti Modelli locali / scaricabili / cloud per Ollama Vision.</li>
+    <li><strong>Lingua Windows OCR</strong> per Windows OCR.</li>
+    <li><strong>Python per Surya / Surya 0.2 / Chandra</strong> — percorso del venv dedicato di ciascun motore.</li>
+    <li><strong>Unisci parole spezzate da trattino a fine riga</strong> — ricompone le parole divise dal trattino di a-capo.</li>
+  </ul>
+  <h3>Sezione Correzione</h3>
+  <ul>
+    <li><strong>Motore</strong> — Ollama, Unsloth Studio o Gemini.</li>
+    <li>Campi specifici del provider (URL, modello, chiave API).</li>
+    <li><strong>Chunking</strong> — Dimensione chunk (token) e Overlap (token).</li>
+  </ul>
+
+  <h2 id="it-engines">6. I motori OCR in dettaglio</h2>
+  <dl>
+    <dt>Tesseract</dt>
+    <dd>OCR classico, veloce e locale. Richiede l'installazione separata di Tesseract e dei pacchetti lingua. Buono per documenti stampati e puliti.</dd>
+    <dt>Ollama Vision</dt>
+    <dd>Modelli vision (VLM) serviti da Ollama, in locale o via cloud Ollama. Adatto a layout complessi; richiede Ollama attivo.</dd>
+    <dt>Unsloth Vision</dt>
+    <dd>Modelli vision serviti da Unsloth Studio (server locale OpenAI-compatibile). Usa lo stesso URL e chiave API impostati nella sezione Correzione. Carica un modello con supporto vision prima di avviare l'OCR.</dd>
+    <dt>Windows OCR <span class="sub">(solo Windows)</span></dt>
+    <dd>OCR nativo di Windows, gratuito e locale. Usa i pacchetti lingua installati dal sistema (Impostazioni → Ora e lingua → Lingua).</dd>
+    <dt>Apple Vision <span class="sub">(solo macOS)</span></dt>
+    <dd>OCR nativo di macOS tramite il framework Vision. Gratuito e locale; richiede gli Xcode Command Line Tools (<code>xcode-select --install</code>).</dd>
+    <dt>Surya 0.1</dt>
+    <dd>Rileva la lingua automaticamente (90+ lingue), gestisce layout multi-colonna con rilevamento dell'ordine di lettura. Gira in un venv dedicato; al primo avvio scarica i modelli (~2 GB).</dd>
+    <dt>Surya 0.2</dt>
+    <dd>Versione più recente con migliore tipografia (corsivi, apici, note). Richiede un backend di inferenza esterno: <strong>Docker Desktop</strong> (GPU NVIDIA) oppure <strong>llama.cpp</strong> (CPU / Apple Silicon). Avvia il server dalla scheda Impostazioni.</dd>
+    <dt>Chandra</dt>
+    <dd>Modello VLM grande (~4B) per documenti complessi, tabelle e manoscritti. Richiede una GPU NVIDIA (consigliati 12 GB+ di VRAM) e usa quantizzazione 4-bit. Lento su hardware consumer (minuti per pagina).</dd>
+  </dl>
+
+  <h2 id="it-llm">7. I motori di correzione LLM</h2>
+  <dl>
+    <dt>Ollama (locale o cloud)</dt>
+    <dd>Modelli LLM serviti da Ollama. Imposta URL del server, modello e — per il cloud — la chiave API. I pulsanti caricano i modelli locali, scaricabili o cloud.</dd>
+    <dt>Unsloth Studio (locale)</dt>
+    <dd>Server locale OpenAI-compatibile (di norma su <code>http://127.0.0.1:8888</code>). Opzioni aggiuntive: <em>reasoning</em> (modalità thinking, più lenta) e <em>ricerca web</em> (richiede un modello con supporto tool).</dd>
+    <dt>Gemini (cloud)</dt>
+    <dd>Google Gemini. Inserisci la chiave API e scegli il modello (es. <code>gemini-2.5-flash</code>).</dd>
+  </dl>
+
+  <h2 id="it-menu">8. Menu, scorciatoie e accessibilità</h2>
+  <h3>Scorciatoie da tastiera</h3>
+  <table>
+    <thead><tr><th>Tasto</th><th>Azione</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Ctrl+O</kbd></td><td>Apri file (nella scheda attiva)</td></tr>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>Salva risultato</td></tr>
+      <tr><td><kbd>F5</kbd></td><td>Avvia (OCR o correzione)</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Interrompi</td></tr>
+      <tr><td><kbd>Alt+1 / 2 / 3</kbd></td><td>Passa a Acquisizione / Correzione / Impostazioni</td></tr>
+      <tr><td><kbd>Alt+F4</kbd></td><td>Esci</td></tr>
+    </tbody>
+  </table>
+  <h3>Menu</h3>
+  <ul>
+    <li><strong>File</strong> — Apri file, Salva risultato, Esci.</li>
+    <li><strong>Operazioni</strong> — Avvia, Interrompi, <em>Annuncia progresso</em>, <em>Aggiorna testo in tempo reale</em>, e (su macOS) <em>Annunci con voce di sistema</em>.</li>
+    <li><strong>Strumenti</strong> — installa/disinstalla Surya 0.1, Surya 0.2, Chandra; Installa Tesseract (Windows); Lingue Tesseract OCR; Lingua interfaccia (Italiano / English…).</li>
+    <li><strong>?</strong> (Aiuto) — Controlla aggiornamenti, Controlla all'avvio, Info.</li>
+  </ul>
+  <h3>Opzioni di accessibilità</h3>
+  <ul>
+    <li><strong>Annuncia progresso</strong> — annuncia vocalmente "Pagina/Chunk X di Y" durante l'elaborazione.</li>
+    <li><strong>Aggiorna testo in tempo reale</strong> — mostra il testo mentre viene prodotto (streaming), utile per seguirlo con lo screen reader.</li>
+    <li>La lingua dell'interfaccia si applica al riavvio dell'applicazione.</li>
+  </ul>
+
+  <h2 id="it-install">9. Installare motori aggiuntivi</h2>
+  <p>Alcuni motori si installano dall'app in un venv dedicato, dal menu <strong>Strumenti</strong> o dai pulsanti nella scheda Impostazioni:</p>
+  <ul>
+    <li><strong>Tesseract</strong> — su Windows usa "Installa Tesseract OCR..."; su macOS <code>brew install tesseract</code>. Le lingue si gestiscono da "Lingue Tesseract OCR...".</li>
+    <li><strong>Surya 0.1 / 0.2</strong> — "Installa Surya..."; richiede connessione internet e alcuni minuti. Surya 0.2 richiede inoltre Docker o llama.cpp.</li>
+    <li><strong>Chandra</strong> — "Installa Chandra..."; scarica diversi GB e richiede una GPU NVIDIA.</li>
+    <li><strong>Ollama</strong> — deve essere in esecuzione localmente sulla porta 11434.</li>
+  </ul>
+  <div class="warn"><p><strong>Nota.</strong> Dopo l'installazione di un motore, riavvia OCRLab per poterlo utilizzare.</p></div>
+
+  <h2 id="it-faq">10. Risoluzione dei problemi</h2>
+  <dl>
+    <dt>"Tesseract non trovato"</dt>
+    <dd>Installa Tesseract e/o imposta il percorso dell'eseguibile in Impostazioni → Path Tesseract.</dd>
+    <dt>Nessuna lingua Windows OCR</dt>
+    <dd>Aggiungi un pacchetto lingua da Impostazioni di Windows → Ora e lingua → Lingua → Aggiungi una lingua.</dd>
+    <dt>Errore di connessione Ollama/Unsloth</dt>
+    <dd>Verifica che il server sia in esecuzione e che URL e chiave API siano corretti.</dd>
+    <dt>La correzione si ferma su rate limit</dt>
+    <dd>È normale con i servizi cloud: l'app riprova da sola e, se serve, usa <strong>Riprendi correzione</strong>.</dd>
+    <dt>Surya/Chandra molto lenti</dt>
+    <dd>Sono modelli pesanti; senza GPU adeguata i tempi salgono a minuti per pagina. Preferisci Tesseract o Windows/Apple Vision per documenti semplici.</dd>
+  </dl>
+
+</div>
+
+<!-- ===================== ENGLISH ===================== -->
+<div class="lang-en" lang="en">
+
+  <nav class="toc" aria-label="Table of contents">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#en-intro">What OCRLab is</a></li>
+      <li><a href="#en-start">Launch and interface layout</a></li>
+      <li><a href="#en-acq">Acquisition tab (OCR)</a></li>
+      <li><a href="#en-corr">Correction tab (LLM)</a></li>
+      <li><a href="#en-set">Settings tab</a></li>
+      <li><a href="#en-engines">OCR engines in detail</a></li>
+      <li><a href="#en-llm">LLM correction engines</a></li>
+      <li><a href="#en-menu">Menus, shortcuts and accessibility</a></li>
+      <li><a href="#en-install">Installing extra engines</a></li>
+      <li><a href="#en-faq">Troubleshooting</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="en-intro">1. What OCRLab is</h2>
+  <p>OCRLab is a desktop application to <strong>capture text from images and PDFs via OCR</strong> and to <strong>correct that text with a language model (LLM)</strong>. It is cross-platform (Windows and macOS) and designed to be <strong>fully accessible with screen readers</strong> (NVDA, VoiceOver) and speech synthesis.</p>
+  <p>It supports several OCR engines — Tesseract, Surya, Windows OCR, Apple Vision, Ollama/Unsloth vision models and Chandra — and several correction providers (Ollama, Unsloth Studio, Google Gemini). You can pick the engine best suited to your document type and language.</p>
+
+  <h2 id="en-start">2. Launch and interface layout</h2>
+  <p>The main window has <strong>three tabs</strong>, reachable with <kbd>Alt+1</kbd>, <kbd>Alt+2</kbd>, <kbd>Alt+3</kbd> or the arrow keys on the tab bar:</p>
+  <ol>
+    <li><strong>Acquisition</strong> — run OCR on an image or PDF.</li>
+    <li><strong>Correction</strong> — correct text (including OCR output) with an LLM.</li>
+    <li><strong>Settings</strong> — choose and configure the OCR and LLM engines.</li>
+  </ol>
+  <p>A <strong>status bar</strong> at the bottom shows the current operation. On first use, configure at least one engine in the Settings tab and press <strong>Save settings</strong>.</p>
+  <div class="note"><p><strong>Tip.</strong> The typical flow is: <em>Acquisition</em> → save the text, or go straight to <em>Correction</em> to polish it with the LLM.</p></div>
+
+  <h2 id="en-acq">3. Acquisition tab (OCR)</h2>
+  <p>Used to extract text from an image or PDF file.</p>
+  <ol>
+    <li>Press <strong>Open file</strong> (<kbd>Ctrl+O</kbd>) and pick a <code>.jpg</code>, <code>.jpeg</code>, <code>.png</code> or <code>.pdf</code> file.</li>
+    <li>Press <strong>Start OCR</strong> (<kbd>F5</kbd>). A progress bar and a "Page X of Y" label show progress.</li>
+    <li>To abort, press <strong>Stop</strong> (<kbd>Esc</kbd>).</li>
+    <li>The text appears in the <strong>OCR Result</strong> box.</li>
+    <li>Press <strong>Save result</strong> (<kbd>Ctrl+S</kbd>) to export it.</li>
+  </ol>
+  <h3>Save formats</h3>
+  <ul>
+    <li><strong>Text</strong> (<code>.txt</code>)</li>
+    <li><strong>Word document</strong> (<code>.docx</code>)</li>
+    <li><strong>Searchable PDF</strong> (<code>.pdf</code>) — the original image with selectable, accessibility-tagged text on top.</li>
+    <li><strong>HTML</strong> (<code>.html</code>) — available only when the engine produces formatting (e.g. Surya).</li>
+  </ul>
+  <p>Multiple pages are internally separated by a form-feed character.</p>
+
+  <h2 id="en-corr">4. Correction tab (LLM)</h2>
+  <p>Used to fix OCR errors, typos and formatting with a language model.</p>
+  <ol>
+    <li>Press <strong>Open file</strong> and load a <code>.txt</code>, <code>.docx</code>, <code>.pdf</code> or <code>.html</code> file. The text appears in <strong>Original text</strong>.</li>
+    <li>Press <strong>Start correction</strong> (<kbd>F5</kbd>). The text is split into <em>chunks</em> processed in sequence; progress shows "Chunk X of Y".</li>
+    <li>The result appears in <strong>Corrected text</strong>; save it with <strong>Save result</strong> as <code>.txt</code> or <code>.docx</code>.</li>
+  </ol>
+  <h3>Resuming after an interruption</h3>
+  <p>If correction is interrupted (for example by a cloud <em>rate limit</em> or a network error), OCRLab saves the already-corrected chunks in a state file next to the document (<code>.ocrlab-resume.json</code>). Reopening the same file shows "Resume available: N of M chunks already corrected" and the <strong>Resume correction</strong> button continues from where it stopped. On rate limits the app retries automatically with increasing back-off.</p>
+  <div class="note"><p><strong>Chunk and overlap.</strong> Chunk size and overlap are set in the Settings tab → Chunking section. Smaller chunks are more robust but slower.</p></div>
+
+  <h2 id="en-set">5. Settings tab</h2>
+  <p>At the top, choose which section to show with the <strong>Show settings</strong> selector: <strong>Acquisition</strong> (OCR engines) or <strong>Correction</strong> (LLM engines and chunking). Remember to press <strong>Save settings</strong> at the bottom.</p>
+  <h3>Acquisition section</h3>
+  <ul>
+    <li><strong>OCR Engine</strong> — choose the engine (see chapter 6). The visible fields change with your choice.</li>
+    <li><strong>Tesseract path</strong> and <strong>Default OCR language</strong> for Tesseract.</li>
+    <li><strong>VLM Model</strong> and the Local / Downloadable / Cloud model buttons for Ollama Vision.</li>
+    <li><strong>Windows OCR language</strong> for Windows OCR.</li>
+    <li><strong>Python for Surya / Surya 0.2 / Chandra</strong> — path to each engine's dedicated venv.</li>
+    <li><strong>Join hyphenated words at line end</strong> — rejoins words split by an end-of-line hyphen.</li>
+  </ul>
+  <h3>Correction section</h3>
+  <ul>
+    <li><strong>Engine</strong> — Ollama, Unsloth Studio or Gemini.</li>
+    <li>Provider-specific fields (URL, model, API key).</li>
+    <li><strong>Chunking</strong> — Chunk size (tokens) and Overlap (tokens).</li>
+  </ul>
+
+  <h2 id="en-engines">6. OCR engines in detail</h2>
+  <dl>
+    <dt>Tesseract</dt>
+    <dd>Classic, fast, local OCR. Requires installing Tesseract and language packs separately. Good for clean printed documents.</dd>
+    <dt>Ollama Vision</dt>
+    <dd>Vision models (VLM) served by Ollama, locally or via Ollama cloud. Good for complex layouts; requires Ollama running.</dd>
+    <dt>Unsloth Vision</dt>
+    <dd>Vision models served by Unsloth Studio (a local OpenAI-compatible server). Uses the same URL and API key set in the Correction section. Load a vision-capable model before running OCR.</dd>
+    <dt>Windows OCR <span class="sub">(Windows only)</span></dt>
+    <dd>Native Windows OCR, free and local. Uses the language packs installed by the system (Settings → Time &amp; language → Language).</dd>
+    <dt>Apple Vision <span class="sub">(macOS only)</span></dt>
+    <dd>Native macOS OCR via the Vision framework. Free and local; requires the Xcode Command Line Tools (<code>xcode-select --install</code>).</dd>
+    <dt>Surya 0.1</dt>
+    <dd>Auto-detects the language (90+ languages) and handles multi-column layouts via reading-order detection. Runs in a dedicated venv; downloads its models (~2 GB) on first run.</dd>
+    <dt>Surya 0.2</dt>
+    <dd>Newer version with better typography (italics, superscripts, notes). Requires an external inference backend: <strong>Docker Desktop</strong> (NVIDIA GPU) or <strong>llama.cpp</strong> (CPU / Apple Silicon). Start the server from the Settings tab.</dd>
+    <dt>Chandra</dt>
+    <dd>Large VLM model (~4B) for complex documents, tables and manuscripts. Requires an NVIDIA GPU (12 GB+ VRAM recommended) and uses 4-bit quantization. Slow on consumer hardware (minutes per page).</dd>
+  </dl>
+
+  <h2 id="en-llm">7. LLM correction engines</h2>
+  <dl>
+    <dt>Ollama (local or cloud)</dt>
+    <dd>LLM models served by Ollama. Set the server URL, the model and — for cloud — the API key. The buttons load local, downloadable or cloud models.</dd>
+    <dt>Unsloth Studio (local)</dt>
+    <dd>Local OpenAI-compatible server (usually at <code>http://127.0.0.1:8888</code>). Extra options: <em>reasoning</em> (thinking mode, slower) and <em>web search</em> (needs a tool-capable model).</dd>
+    <dt>Gemini (cloud)</dt>
+    <dd>Google Gemini. Enter the API key and choose the model (e.g. <code>gemini-2.5-flash</code>).</dd>
+  </dl>
+
+  <h2 id="en-menu">8. Menus, shortcuts and accessibility</h2>
+  <h3>Keyboard shortcuts</h3>
+  <table>
+    <thead><tr><th>Key</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Ctrl+O</kbd></td><td>Open file (in the active tab)</td></tr>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>Save result</td></tr>
+      <tr><td><kbd>F5</kbd></td><td>Start (OCR or correction)</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Stop</td></tr>
+      <tr><td><kbd>Alt+1 / 2 / 3</kbd></td><td>Switch to Acquisition / Correction / Settings</td></tr>
+      <tr><td><kbd>Alt+F4</kbd></td><td>Exit</td></tr>
+    </tbody>
+  </table>
+  <h3>Menus</h3>
+  <ul>
+    <li><strong>File</strong> — Open file, Save result, Exit.</li>
+    <li><strong>Operations</strong> — Start, Stop, <em>Announce progress</em>, <em>Update text in real-time</em>, and (on macOS) <em>System voice announcements</em>.</li>
+    <li><strong>Tools</strong> — install/uninstall Surya 0.1, Surya 0.2, Chandra; Install Tesseract (Windows); Tesseract OCR languages; Interface language (Italiano / English…).</li>
+    <li><strong>Help</strong> — Check for updates, Check at startup, About.</li>
+  </ul>
+  <h3>Accessibility options</h3>
+  <ul>
+    <li><strong>Announce progress</strong> — speaks "Page/Chunk X of Y" during processing.</li>
+    <li><strong>Update text in real-time</strong> — shows text as it is produced (streaming), handy to follow with a screen reader.</li>
+    <li>The interface language takes effect after restarting the application.</li>
+  </ul>
+
+  <h2 id="en-install">9. Installing extra engines</h2>
+  <p>Some engines install from within the app into a dedicated venv, from the <strong>Tools</strong> menu or the buttons in the Settings tab:</p>
+  <ul>
+    <li><strong>Tesseract</strong> — on Windows use "Install Tesseract OCR..."; on macOS <code>brew install tesseract</code>. Languages are managed from "Tesseract OCR languages...".</li>
+    <li><strong>Surya 0.1 / 0.2</strong> — "Install Surya..."; needs an internet connection and a few minutes. Surya 0.2 also requires Docker or llama.cpp.</li>
+    <li><strong>Chandra</strong> — "Install Chandra..."; downloads several GB and requires an NVIDIA GPU.</li>
+    <li><strong>Ollama</strong> — must be running locally on port 11434.</li>
+  </ul>
+  <div class="warn"><p><strong>Note.</strong> After installing an engine, restart OCRLab to use it.</p></div>
+
+  <h2 id="en-faq">10. Troubleshooting</h2>
+  <dl>
+    <dt>"Tesseract not found"</dt>
+    <dd>Install Tesseract and/or set the executable path in Settings → Tesseract path.</dd>
+    <dt>No Windows OCR language</dt>
+    <dd>Add a language pack from Windows Settings → Time &amp; language → Language → Add a language.</dd>
+    <dt>Ollama/Unsloth connection error</dt>
+    <dd>Check the server is running and that the URL and API key are correct.</dd>
+    <dt>Correction stops on a rate limit</dt>
+    <dd>Normal with cloud services: the app retries on its own and, if needed, use <strong>Resume correction</strong>.</dd>
+    <dt>Surya/Chandra very slow</dt>
+    <dd>These are heavy models; without a suitable GPU, times rise to minutes per page. Prefer Tesseract or Windows/Apple Vision for simple documents.</dd>
+  </dl>
+
+</div>
+
+</main>
+
+<footer>
+  <p class="lang-it">OCRLab 0.2.2 — Programma per l'acquisizione e la correzione del testo tramite OCR e LLM. Completamente accessibile con screen reader.</p>
+  <p class="lang-en">OCRLab 0.2.2 — Utility for text acquisition and correction via OCR and LLM. Fully accessible with screen readers.</p>
+</footer>
+
+</div>
+
+<script>
+  function setLang(lang) {
+    document.documentElement.setAttribute('data-lang', lang);
+    document.documentElement.setAttribute('lang', lang);
+    document.getElementById('btn-it').setAttribute('aria-pressed', String(lang === 'it'));
+    document.getElementById('btn-en').setAttribute('aria-pressed', String(lang === 'en'));
+    document.title = lang === 'en' ? 'OCRLab — Manual' : 'OCRLab — Manuale';
+    // Skip link + document title localisation
+    var skip = document.querySelector('.skip');
+    if (skip) skip.textContent = skip.getAttribute('data-' + lang);
+    try { localStorage.setItem('ocrlab-manual-lang', lang); } catch (e) {}
+  }
+  (function () {
+    var saved = 'it';
+    try { saved = localStorage.getItem('ocrlab-manual-lang') || 'it'; } catch (e) {}
+    setLang(saved);
+  })();
+</script>
+</body>
+</html>

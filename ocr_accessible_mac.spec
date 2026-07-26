@@ -147,7 +147,7 @@ app = BUNDLE(
     icon=None,          # sostituire con "app/resources/ocrlab.icns" quando disponibile
     bundle_identifier="it.lucacasarotti.ocrlab",
     info_plist={
-        "CFBundleShortVersionString": "0.2.1",
+        "CFBundleShortVersionString": "0.2.2",
         "CFBundleVersion": "4",
         "NSHighResolutionCapable": True,
         "NSMicrophoneUsageDescription": "Non richiesto.",
